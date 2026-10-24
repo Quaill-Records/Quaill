@@ -1,0 +1,19 @@
+quaill_chain:
+  ros__parameters:
+    topics: ["/cmd_vel", "/odom", "/auto/cmd_vel", "/teleop/cmd_vel"]
+    chain_quaill_topics: true     # also chain /quaill/control_mode and /quaill/session
+    discover: false               # true: chain every topic seen (except /quaill/chain, /rosout, /parameter_events)
+    state_dir: "~/.quaill"        # session.json (crash detection) and witness.json live here
+    witness_every_s: 10.0
+    software_version: "demo-0.0.2"
+    tsa_url: ""                   # e.g. "https://freetsa.org/tsr" to get an RFC 3161 receipt per witness entry (pip install rfc3161ng)
+    sign: true                    # Ed25519 signature on every link (python3-cryptography); key generated on first run
+    key_path: ""                  # default <state_dir>/device.key.pem; keep the private key off the log host in real use
+
+quaill_control_mode:
+  ros__parameters:
+    source: "topic"               # "topic" (std_msgs/String) or "autoware" (autoware_vehicle_msgs/ControlModeReport)
+    mode_topic: "/quaill/mode_source"
+    heartbeat_hz: 1.0
+    initial_mode: "NOT_READY"
+    operator_ref: "op-7f3a"       # used when a MANUAL source gives no operator

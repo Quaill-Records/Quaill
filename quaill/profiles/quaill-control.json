@@ -1,0 +1,16 @@
+{
+  "name": "quaill-control",
+  "version": "0.0.2",
+  "status": "draft",
+  "title": "Quaill control attribution and completeness layout (our addition)",
+  "source": "Shape follows autoware_vehicle_msgs/ControlModeReport (mode numbering) plus a pseudonymous operator_ref and reason; session markers follow car EDR / flight-recorder practice. Written into the bag as three channels (see ros2_ws/src/quaill_msgs).",
+  "notes": "This is the part no enacted rule has yet: who was in control, and when it changed. Proposed as a convention, not owned. Rule for recorders: the node that publishes the control mode must be the arbiter that decides whose commands reach the actuators, not a flag next to it.",
+  "items": [
+    { "id": "C1", "name": "Control mode report", "topic": "/quaill/control_mode", "fields": ["stamp", "mode"], "required": true },
+    { "id": "C2", "name": "Operator reference whenever control is MANUAL", "topic": "/quaill/control_mode", "fields": ["operator_ref"], "when": { "field": "mode", "equals": 4 }, "required": true },
+    { "id": "C3", "name": "Session markers with software version", "topic": "/quaill/session", "fields": ["stamp", "event", "session_id", "software_version"], "required": true },
+    { "id": "C4", "name": "Hash chain links", "topic": "/quaill/chain", "fields": ["seq", "prev", "link", "msg_sha256"], "required": false }
+  ],
+  "operator_command_topics": ["*teleop*", "*joy*", "*remote*", "*manual*", "*operator*"],
+  "checks": ["format", "integrity", "control", "completeness"]
+}

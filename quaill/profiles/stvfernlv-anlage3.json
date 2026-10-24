@@ -1,0 +1,35 @@
+{
+  "name": "stvfernlv-anlage3",
+  "version": "0.0.1",
+  "status": "draft mapping, not an official schema",
+  "title": "Germany StVFernLV Anlage 3: data a remote-driven vehicle must record (in force 1 Dec 2025)",
+  "source": "https://www.gesetze-im-internet.de/stvfernlv/anlage_3.html and §15. Items A1-A15 and events E1-E6 paraphrase the German list; the topic/field mapping onto MCAP is Quaill's draft and needs a German-reading reviewer.",
+  "notes": "The law names the remote driver (certificate). GDPR is handled by a mandatory DPIA, not by leaving the field out. Retention: delete no later than 3 years after remote operation ends. Data goes to the KBA, authorities, and third parties with a legal claim. The law has no tamper-protection clause; the hash chain + witness here is Quaill's addition, graded separately.",
+  "items": [
+    { "id": "A1", "name": "Vehicle identification number", "topic": "/stvfernlv/vehicle", "fields": ["vin"] },
+    { "id": "A2", "name": "Position (lat/long 5 decimals, altitude, direction changes)", "topic": "/stvfernlv/telemetry", "fields": ["position.lat", "position.lon", "position.alt", "position.heading"] },
+    { "id": "A3", "name": "Start/end of remote driving with trip number", "topic": "/stvfernlv/event", "fields": ["event", "trip_number"] },
+    { "id": "A4", "name": "Remote driver (certificate name and validity)", "topic": "/stvfernlv/remote_driver", "fields": ["certificate_name", "certificate_valid_until"] },
+    { "id": "A5", "name": "System monitoring, fault memory, software version", "topic": "/stvfernlv/telemetry", "fields": ["system.software_version", "system.faults"] },
+    { "id": "A6", "name": "Environment and weather", "topic": "/stvfernlv/telemetry", "fields": ["environment.weather", "environment.visibility_m"] },
+    { "id": "A7", "name": "Connectivity (latency, bandwidth), whole period", "topic": "/stvfernlv/telemetry", "fields": ["connectivity.latency_ms", "connectivity.bandwidth_kbps"] },
+    { "id": "A8", "name": "Active/passive safety systems and their triggering", "topic": "/stvfernlv/telemetry", "fields": ["safety_systems.abs_active", "safety_systems.aeb_triggered"] },
+    { "id": "A9", "name": "Speed", "topic": "/stvfernlv/telemetry", "fields": ["motion.speed_mps"] },
+    { "id": "A10", "name": "Longitudinal and lateral acceleration", "topic": "/stvfernlv/telemetry", "fields": ["motion.accel_long", "motion.accel_lat"] },
+    { "id": "A11", "name": "Power supply", "topic": "/stvfernlv/telemetry", "fields": ["power.voltage", "power.soc"] },
+    { "id": "A12", "name": "Commands sent from outside, stored as sent", "topic": "/stvfernlv/command", "fields": ["as_sent", "steering_deg", "throttle", "brake"] },
+    { "id": "A13", "name": "Lighting status", "topic": "/stvfernlv/telemetry", "fields": ["lighting.low_beam", "lighting.indicator"] },
+    { "id": "A14", "name": "Initiation of the minimal-risk condition", "topic": "/stvfernlv/event", "fields": ["event"] },
+    { "id": "A15", "name": "Takeover of the driving task by an in-vehicle driver", "topic": "/stvfernlv/event", "fields": ["event"] }
+  ],
+  "events": {
+    "topic": "/stvfernlv/event",
+    "field": "event",
+    "values": ["REMOTE_DRIVING_START", "REMOTE_DRIVING_END", "FAULT", "NEAR_ACCIDENT", "ACCIDENT", "CONFLICT_SCENARIO", "MRC_INITIATED", "TAKEOVER_IN_VEHICLE"],
+    "pairs": [["REMOTE_DRIVING_START", "REMOTE_DRIVING_END"]],
+    "window_s": 10,
+    "window_values": ["FAULT", "NEAR_ACCIDENT", "ACCIDENT", "CONFLICT_SCENARIO", "MRC_INITIATED", "TAKEOVER_IN_VEHICLE"],
+    "window_topics": ["/stvfernlv/telemetry"]
+  },
+  "checks": ["format", "integrity", "control", "completeness"]
+}

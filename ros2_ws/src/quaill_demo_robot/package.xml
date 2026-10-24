@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>quaill_demo_robot</name>
+  <version>0.0.2</version>
+  <description>A fake robot with real handovers: an autonomous driver, keyboard teleop, and a mode manager that decides whose commands reach /cmd_vel. No simulator needed.</description>
+  <maintainer email="254507736+Deseace@users.noreply.github.com">Quaill</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>quaill_recorder</depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

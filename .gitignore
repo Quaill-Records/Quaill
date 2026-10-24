@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+demo-logs/
+.quaill/
+
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+*.key.pem
+*.key
+.env
+.env.*
