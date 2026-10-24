@@ -13,19 +13,19 @@ It is deterministic. No AI inside. Same file, same report. It states facts ("no 
 Python 3.12 or newer. No ROS install needed.
 
 ```bash
-pip install -r requirements.txt
-python -m quaill demo demo-logs
+pip install quaill
+quaill demo demo-logs
 ```
 
-That generates 52 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`. Then:
+That generates 52 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`.
+
+From a clone of this repository, `pip install -r requirements.txt` and `python -m quaill` work the same way, and
 
 ```bash
 python tests/check_hashes.py
 ```
 
 confirms the ROS 2 sidecar and the checker hash identically.
-
-Below, `quaill` means `python -m quaill`.
 
 | Command | What it does |
 |---|---|
