@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quaill"
+version = "0.0.2"
+description = "Open checker for robot logs: who was in control, was it edited, what's missing."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Quaill LLC" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcap>=1.6",
+    "mcap-ros2-support>=0.6",
+    "rosbags>=0.11",
+    "cryptography>=44",
+    "zstandard>=0.25",
+    "ruamel.yaml>=0.18",
+]
+keywords = ["robotics", "ros2", "mcap", "rosbag", "logging", "audit"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Source = "https://github.com/Quaill-Records/Quaill"
+Issues = "https://github.com/Quaill-Records/Quaill/issues"
+
+[project.scripts]
+quaill = "quaill.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["quaill", "quaill.*"]
+
+[tool.setuptools.package-data]
+quaill = ["profiles/*.json"]
