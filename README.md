@@ -111,6 +111,7 @@ Does not prove: anything about a real robot. All 52 logs come from the synthetic
 
 - [THREAT-MODEL.md](THREAT-MODEL.md): who might fake a log, what each check catches against whom, what nothing can catch.
 - [TRADEMARK.md](TRADEMARK.md): how the name may be used; never "certified", "verified", "compliant", "safe".
+- [PRIVACY.md](PRIVACY.md): `operator_ref` is personal data; what a maker or operator should consider before switching the layout on.
 
 ## Not in v0.0.2 yet
 
@@ -127,7 +128,7 @@ Does not prove: anything about a real robot. All 52 logs come from the synthetic
   requirements.txt      pinned Python dependencies
   LICENSE, NOTICE       Apache-2.0, Copyright Quaill LLC
   CLA.md, CONTRIBUTING.md
-  THREAT-MODEL.md, TRADEMARK.md
+  THREAT-MODEL.md, TRADEMARK.md, PRIVACY.md
   tests\check_hashes.py connector and checker hash identically
   ros2_ws\src\
     quaill_msgs\        ControlModeReport.msg, SessionEvent.msg, ChainLink.msg (spec v0.0.2)

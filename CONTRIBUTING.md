@@ -6,6 +6,6 @@ Thanks for looking. Quaill Records is maintained by Quaill LLC; the maintainer h
 2. **Run the demo before you open a pull request.** `python -m quaill demo demo-logs` must end with `all as expected`.
 3. **Keep the checker deterministic.** Same file, same report. No network calls, no AI, no guessing.
 4. **Wording.** Reports and docs say "meets checks" or "checks against profile X". Never "certified", "safe", "accredited" or "compliant". See [TRADEMARK.md](TRADEMARK.md).
-5. **No real personal data in test logs.** `operator_ref` is a token, never a name.
+5. **No real personal data in test logs.** `operator_ref` is a token, never a name. See [PRIVACY.md](PRIVACY.md).
 
 Bugs, real logs that break the checker, and new profiles (a regulator's or standard's field list) are the most useful contributions. Open an issue first for anything large.
