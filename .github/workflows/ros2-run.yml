@@ -1,0 +1,78 @@
+# Records real rosbag2 bags from the ROS 2 Jazzy connector on a plain CI runner and runs the checker on them.
+# Fake robot, scripted operator, real ROS 2 and real `ros2 bag record`. Not a physical robot.
+# Bags, witness files, process logs and checker reports are kept as a downloadable artifact.
+name: ROS 2 run
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ros2_ws/**"
+      - "quaill/**"
+      - "pyproject.toml"
+      - ".github/workflows/ros2-run.yml"
+  pull_request:
+    paths:
+      - "ros2_ws/**"
+      - "quaill/**"
+      - "pyproject.toml"
+      - ".github/workflows/ros2-run.yml"
+
+jobs:
+  record-and-check:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the packages need
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ros-jazzy-rosbag2-storage-mcap ros-jazzy-nav-msgs ros-jazzy-geometry-msgs \
+            ros-jazzy-teleop-twist-keyboard python3-cryptography python3-venv python3-pip
+
+      - name: Let the sidecar ask a public timestamp authority for receipts
+        run: pip install --quiet --break-system-packages rfc3161ng
+
+      - name: Build the connector
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          rosdep update --rosdistro jazzy
+          rosdep install --from-paths src --ignore-src -r -y
+          colcon build --symlink-install
+
+      - name: Install the checker from this checkout
+        run: |
+          python3 -m venv "$HOME/qenv"
+          "$HOME/qenv/bin/pip" install --quiet .
+          "$HOME/qenv/bin/quaill" --version
+
+      - name: Check the synthetic cases still pass
+        run: |
+          "$HOME/qenv/bin/quaill" demo demo-logs | tail -n 3
+          "$HOME/qenv/bin/python" tests/check_hashes.py
+
+      - name: Record the runs and check each bag
+        shell: bash
+        env:
+          QUAILL_TSA_URL: https://freetsa.org/tsr   # every witness head gets an RFC 3161 receipt from a public clock
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source ros2_ws/install/setup.bash
+          QUAILL_BIN="$HOME/qenv/bin/quaill" bash ros2_ws/record_runs.sh "$PWD/ros2-runs"
+
+      - name: Summary
+        if: always()
+        run: python3 ros2_ws/summarize_runs.py ros2-runs --github
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ros2-runs
+          path: ros2-runs
+          retention-days: 30

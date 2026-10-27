@@ -18,6 +18,7 @@ dependencies = [
     "cryptography>=44",
     "zstandard>=0.25",
     "ruamel.yaml>=0.18",
+    "asn1crypto>=1.5",
 ]
 keywords = ["robotics", "ros2", "mcap", "rosbag", "logging", "audit"]
 classifiers = [

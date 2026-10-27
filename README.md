@@ -8,6 +8,50 @@ Checks a robot's log and answers three questions:
 
 It is deterministic. No AI inside. Same file, same report. It states facts ("no messages 03:20 to 05:20, no shutdown marker before, no crash note after"), never guesses or accusations. It is a checker, not a recorder: it reads a finished log, anywhere, later.
 
+## Start with a log you already have
+
+Most robots today record nothing Quaill-specific. Run the checker on such a bag first, so you see exactly what can and cannot be established from it. This is the real output for a plain bag with no Quaill channels (here a ROS 1 bag from the demo set):
+
+```
+$ quaill verify robot.bag --profile none
+
+  L0 format        PASS
+  L1 integrity     NOT ASSESSABLE
+  L2 control       NOT ASSESSABLE
+  L2 completeness  PASS            0 gap(s), 0 unexplained, ending unknown (no session markers)
+  profile          NOT RUN
+
+FINDINGS  (0 fail, 0 warn, 3 info)
+  info  CHAIN_ABSENT      no /quaill/chain channel: edits and deletions cannot be checked from this file
+  info  CONTROL_ABSENT    no /quaill/control_mode channel: who was in control cannot be determined from this log
+  info  SESSION_ABSENT    no /quaill/session markers: a crash, a clean stop and a cut-off end cannot be told apart in this log
+
+result   MEETS CHECKS (exit 0)
+```
+
+That is the honest answer for a log that exists today: it is readable, nothing in it says who was in control, and nothing in it can show whether it was changed. "Meets checks" means the built-in checks found nothing wrong, not that the log proves anything.
+
+Against a regulator's field list, the same bag gets an inventory of what is missing:
+
+```
+$ quaill verify robot.bag --profile stvfernlv-anlage3
+
+  profile          FAIL            stvfernlv-anlage3: 0/15 items present with all fields
+
+PROFILE ITEMS  (stvfernlv-anlage3)
+  A1   Vehicle identification number                        MISSING
+  A2   Position (lat/long 5 decimals, altitude, direction)  MISSING
+  A3   Start/end of remote driving with trip number         MISSING
+  ...
+  A15  Takeover of the driving task by an in-vehicle driver MISSING
+
+result   DOES NOT MEET CHECKS (exit 1)
+```
+
+A profile names the topics it expects (the shipped ones use placeholder names such as `/stvfernlv/telemetry`). A real fleet points the items at its own topics and field names with a small mapping file, `--map my-fleet.json` (format in [quaill/profiles/MAPPING.md](quaill/profiles/MAPPING.md)); the report then shows which topic each item was checked on. The checker does not guess topic names, and a mapping cannot invent data: an item the robot never records stays MISSING.
+
+The three channels below (`/quaill/control_mode`, `/quaill/session`, `/quaill/chain`) are what turn NOT ASSESSABLE into an answer. They come from a sidecar that runs next to the robot's own recorder; nothing in the robot's own topics is touched.
+
 ## Run it
 
 Python 3.12 or newer. No ROS install needed.
@@ -17,7 +61,7 @@ pip install quaill
 quaill demo demo-logs
 ```
 
-That generates 52 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`.
+That generates 54 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`.
 
 From a clone of this repository, `pip install -r requirements.txt` and `python -m quaill` work the same way, and
 
@@ -52,7 +96,7 @@ The witness is picked up automatically from `<log>.witness.json`, `<bag_dir>/wit
 
 Not read: PX4 ULog, proprietary formats, protobuf-encoded MCAP (planned: `mcap-protobuf-support`).
 
-Memory: payload messages keep only a hash and times; bytes are kept for the Quaill channels and for topics a profile looks into. A multi-gigabyte bag still means a multi-million-entry list in memory, so this is "streams the bytes", not yet "constant memory".
+Memory: payload messages keep only a hash and times; bytes are kept for the Quaill channels and for topics a profile looks into. A multi-gigabyte bag still means a multi-million-entry list in memory, so this is "streams the bytes", not yet "constant memory". Measured on a laptop with synthetic logs: a 2-hour, 17 MB log verifies in 8 s using 290 MB; a 10-hour, 84 MB log in 85 s using 1.4 GB with a witness (29 s without). A fleet bag of several gigabytes will not fit yet.
 
 ## Levels
 
@@ -80,7 +124,11 @@ Three channels added next to whatever the robot already records. Nothing in the 
 
 **Sessions.** A sidecar that dies and restarts mid-bag starts a new chain under a new `session_id`; the checker verifies each session's chain on its own (`CHAIN_RESTART`) and witness files are per session.
 
+**Late start.** `ros2 bag record` usually starts after the sidecar, so a bag begins mid-chain: the first link in the file is above 1, the latched `START` marker arrives without its link, and the witness may hold heads from before the file begins. The checker verifies the chain from the first link it has and says so (`CHAIN_STARTS_LATE`, `WITNESS_BEFORE_START`, `MESSAGE_BEFORE_START`), because a bag that started late looks the same as a file whose beginning was removed; the file alone cannot tell which, and the report does not pretend to. The allowance is judged against the whole session, not per topic: links from before the first message the file holds at all, or within 5 s before the bag's first message on a topic (rosbag2 subscribes a moment after a topic appears), are flagged; every other link without its message is `MESSAGE_MISSING`, so deleting every message on one topic cannot pass as a late subscription. In the other direction, a control report or session marker that has no link while the chain was demonstrably running (between the chain's first and last matched message) is a failure (`MESSAGE_UNCHAINED`), because it was added afterwards or the chain node never saw it; unchained messages before the chain began or after it ended are only flagged.
+
 **Signatures, and what they buy.** Every link is signed with an Ed25519 device key; the START marker announces the public key. Three levels of trust, in the report's words: `SIGNED_TRUSTED` (verified against a key you supplied, so nobody without that key produced this chain), `SIGNED_ANNOUNCED` (verifies against the key the bag itself announces, which a forger could swap, so it only proves self-consistency), `UNSIGNED`. The demo shows the boundary: a thorough outsider who rewrites the human stretch, deletes the teleop traffic, rebuilds the chain with their own key and swaps the announced key produces a file that passes with no key and no witness, and fails `KEY_MISMATCH` the moment the real device key is supplied. An outsider who only forges the ending fails `KEY_CHANGED` on their own. An insider with the device key is still caught only by the witness. Keep the private key off the log host; a key next to the bag is a formality.
+
+**Receipts: what makes a witness an outside witness.** A witness file written by the recorder is a note, not evidence. An RFC 3161 receipt from a timestamp authority turns a head into one: the authority signs (hash of the link, its own clock time), so the chain through that link existed by then, whatever the robot's clock said. The sidecar requests one per head when `tsa_url` is set; `quaill stamp WITNESS` adds them to an existing witness file after the fact (default authority: freetsa.org, a public test service; use one you would defend in a dispute). The checker reports `RECEIPT_VALID` (imprint matches the link, the signed digest matches the token, the signature verifies with the authority's certificate embedded in the receipt or given with `--tsa-cert`), `RECEIPT_INVALID`, `RECEIPT_UNVERIFIED` (no certificate to check the signature against) or `RECEIPT_ABSENT`. It does not validate the authority's certificate chain to a root or check revocation; it names the authority so a reader can decide whether to trust it.
 
 **The recorder can lie by omission.** If a human drives through a channel the mode source does not watch, the reports say AUTONOMOUS and no hash can tell. The visible trace is the human's own command traffic: `CONTROL_INCONSISTENT` fires when operator-command topics (by default anything matching `*teleop*`, `*joy*`, `*remote*`, `*manual*`, `*operator*`; a profile can list its own) carry many *distinct* messages during a stretch reported as not-human. A parked joystick repeating one message does not trigger it. Rule for recorders: the node that reports the mode must be the arbiter that decides whose commands reach the motors.
 
@@ -99,13 +147,15 @@ Any future field list (UN R157 DSSAD, ISO/IEC 24970, EN 50742 tracing log) is an
 - `quaill_recorder`: the sidecar. `chain` subscribes raw to configured (or all discovered) topics, hashes the exact bytes the publisher sent, publishes one `ChainLink` per message, writes `START` / `CLEAN_SHUTDOWN` / `CRASH_NOTE` markers (a dirty state file after `kill -9` triggers the crash note on the next start), and writes witness heads every 10 s, with an optional RFC 3161 receipt per head. `control_mode` turns a mode source (a String topic or Autoware's `ControlModeReport`) into standard reports with a heartbeat.
 - `quaill_demo_robot`: a fake robot with real handovers. `mode_manager` decides whose `/cmd_vel` reaches the robot (autonomy or `teleop_twist_keyboard`) and is therefore the node that reports who is driving. No simulator needed.
 
-The one open question only hardware settles: whether rosbag2 stores exactly the bytes the sidecar hashed.
+`ros2_ws/record_runs.sh` records the test bags on a real ROS 2 Jazzy system with nobody at a keyboard: the fake robot, both sidecars, `ros2 bag record`, a scripted operator (`scripted_teleop`) taking over twice, then a bag with no Quaill nodes at all, a killed recorder, a killed-and-restarted sidecar, and a power cut. `ros2_ws/summarize_runs.py` turns the checker's reports into one table. The workflow in `.github/workflows/ros2-run.yml` does all of that on a plain Ubuntu 24.04 runner and keeps the bags, witness files and reports as a downloadable artifact. Real ROS 2 and real bags; not a physical robot.
+
+The one open question only a real recording settles: whether rosbag2 stores exactly the bytes the sidecar hashed. The workflow's summary answers it for each run.
 
 ## What the demo proves and what it does not
 
 Proves: every planted defect is caught in both encodings and in every container; clean logs pass; the checker reads real `ros2msg`/CDR bags, rosbag2 directories (mcap and sqlite3, split, compressed), single `.db3` files and ROS 1 bags; the witness logic separates "recorder died" from "end was cut"; the sidecar and the checker hash identically.
 
-Does not prove: anything about a real robot. All 52 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product.
+Does not prove: anything about a real robot. All 54 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product.
 
 ## Other pages
 
@@ -116,7 +166,8 @@ Does not prove: anything about a real robot. All 52 logs come from the synthetic
 ## Not in v0.0.2 yet
 
 - Key registration. The checker trusts a key you hand it; nothing yet ties a key to a robot in a registry or a witness record beyond the per-entry `key_id`.
-- A real witness in the checker. The connector can fetch RFC 3161 receipts; the checker does not verify them yet.
+- Validation of a timestamp authority's certificate chain. Receipts are checked against the certificate embedded in them or given with `--tsa-cert`; a forged receipt with a self-signed certificate that names a real authority passes unless the real certificate is supplied.
+- `session_id` is not part of the link hash or signature, so the checker cannot tell a relabeled chain from a different session; a witness that matches no session in the file fails (`WITNESS_UNMATCHED`) rather than being ignored.
 - `mcap doctor` delegation for L0. Protobuf MCAP. Constant-memory streaming.
 - CDR generation for the remote-vehicle scenario (JSON-only; the checker is encoding-agnostic).
 - A browser drop-in and a GitHub Action.

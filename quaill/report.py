@@ -49,6 +49,8 @@ def render_text(rep: Report) -> str:
     L.append(f"sha256   {log.sha256}" + (f"  (over {len(log.files)} files)" if len(log.files) > 1 else ""))
     L.append(f"witness  {rep.witness_path or 'none supplied'}")
     L.append(f"pubkey   {rep.pubkey_path or 'none supplied (signatures checked against the key announced in the bag, if any)'}")
+    if rep.tsa_cert_path:
+        L.append(f"tsa cert {rep.tsa_cert_path}")
     chans = len(log.topic_counts)
     L.append(f"span     {fmt_abs(log.start)} -> {fmt_abs(log.end)}  ({fmt_dur(log.end - log.start)}), {chans} channels, {len(log.messages):,} messages" + (f", recorder: {log.library}" if log.library else ""))
     L.append("")
@@ -109,7 +111,8 @@ def render_text(rep: Report) -> str:
         L.append("")
 
     if pr and pr.items:
-        L.append(f"PROFILE ITEMS  ({pr.name})")
+        mapped = bool(rep.profile and rep.profile.get("mapping_applied"))
+        L.append(f"PROFILE ITEMS  ({pr.name}" + (", mapped onto this fleet's topics)" if mapped else ")"))
         for i in pr.items:
             if not i["present"]:
                 status = "MISSING"
@@ -121,7 +124,7 @@ def render_text(rep: Report) -> str:
                 status = "fields missing: " + ", ".join(i["missing_fields"])
             else:
                 status = f"present ({i['messages']:,} msgs)"
-            L.append(f"  {i.get('id') or '':<4} {(i.get('name') or '')[:52]:<52} {status}")
+            L.append(f"  {i.get('id') or '':<4} {(i.get('name') or '')[:52]:<52} {status}" + (f"  [{i.get('topic')}]" if mapped else ""))
         L.append("")
 
     fs = rep.findings
@@ -179,7 +182,9 @@ def render_json(rep: Report) -> dict:
                 "witness_present": bool(rep.chain and rep.chain.witness_present),
                 "witnessed_through_seq": rep.chain.witnessed_through_seq if rep.chain else None,
                 "truncated": bool(rep.chain and rep.chain.truncated),
+                "receipts": rep.chain.receipts if rep.chain else [],
             },
+            "tsa_cert": rep.tsa_cert_path,
             "profile_items": rep.profile_result.items if rep.profile_result else [],
             "findings": [f.to_dict() for f in rep.findings],
         }

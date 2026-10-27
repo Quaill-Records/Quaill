@@ -68,6 +68,7 @@ DELIVERY_DEFECTS = {
     "handover-back-missing": "control reports stop right after the human takes over; the robot keeps logging",
     "clock-back": "recorder clock set back 40 s at 03:00 and forward again at 04:00 (timestamps lie; chain intact)",
     "sidecar-restart": "the chain sidecar is killed at 03:20 and restarted at 03:30 while the robot keeps logging: 10 s unchained, then a second chain under a new session id",
+    "late-start": "the bag starts at 00:45, after the recorder: nothing before that is in the file except the latched START marker, so the chain begins above link 1 and the witness holds an older head",
     "hidden-teleop": "a human drives via /teleop/cmd_vel from 06:00 to 06:20 but the control reports keep saying AUTONOMOUS (the mode source lied by omission); chain intact",
     "rechain-nokey": "a thorough outsider without the device key rewrites the human stretch to AUTONOMOUS, deletes the teleop traffic, rebuilds the chain with their own key and swaps the announced key; caught only if the real device key is known (--pubkey) or a witness exists",
     "truncate-nokey": "an outsider without the device key cuts the end and appends a forged shutdown signed with their own key; caught by the signature check alone",
@@ -75,6 +76,7 @@ DELIVERY_DEFECTS = {
 DEMO_SIGNER = Signer.from_seed(b"quaill demo device key 0001") if CRYPTO else None
 ATTACKER_SIGNER = Signer.from_seed(b"someone without the device key") if CRYPTO else None
 T_SIDECAR_DOWN, T_SIDECAR_UP = 200.0, 210.0
+T_LATE = 45.0
 T_HIDDEN_A, T_HIDDEN_B = 360.0, 380.0
 VEHICLE_DEFECTS = {
     "unpaired": "REMOTE_DRIVING_END never written after REMOTE_DRIVING_START",
@@ -406,6 +408,13 @@ def apply_defect(entries: list[Entry], defect: str | None, start: int, encoder: 
                 e.payload = dict(e.payload, device_pubkey=attacker.pub_hex() if attacker else None)
                 e.data = encoder.encode(e.topic, e.payload, e.t)
         return rechain(kept, attacker)
+    if defect == "late-start":
+        kept = [e for e in entries if rel(e) >= T_LATE]
+        for e in entries:  # START is latched: a bag that subscribes late still gets the message, but its link went by earlier
+            if e.topic == SESSION_TOPIC and e.payload.get("event") == "START":
+                kept.insert(0, Entry(kept[0].t - NS // 100, 0, SESSION_TOPIC, e.payload, e.data, None))
+                break
+        return kept
     if defect in ("truncate", "truncate-nokey"):
         kept = [e for e in entries if rel(e) <= T_TRUNC]
         forger = signer if defect == "truncate" else ATTACKER_SIGNER  # insider keeps the real key; outsider signs with their own

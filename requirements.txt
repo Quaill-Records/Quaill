@@ -4,3 +4,4 @@ rosbags==0.11.9
 cryptography==50.0.2
 zstandard==0.25.0
 ruamel.yaml==0.19.1
+asn1crypto==1.5.1

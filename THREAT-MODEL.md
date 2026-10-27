@@ -29,12 +29,18 @@ One page on who might fake a robot log, what each check catches against them, an
 | Delete a message and its link | Yes | chain: sequence gap, prev mismatch (`CHAIN_BROKEN`) | anyone who holds only the file |
 | Delete and rebuild the whole chain | **Only with a witness** | witness head ≠ file head (`WITNESS_MISMATCH`) | anyone, including the maker, if the witness is outside |
 | Cut the end and append a forged shutdown | **Only with a witness** | witness holds a later head (`TRUNCATED`) | same |
+| Remove the beginning of the file | **Flagged, not decided** | a bag that started after the sidecar looks the same (`CHAIN_STARTS_LATE`, `MESSAGE_BEFORE_START`); a witness head from before the file's first link only confirms the chain existed earlier, not what it held | anyone who holds only the file |
+| Remove the first messages on one topic, or every message on it | Yes, beyond 5 s | links from inside the stretch the file covers are `MESSAGE_MISSING`; only links within 5 s before the bag's first message on that topic are allowed as a late subscription (`MESSAGE_BEFORE_START`) | anyone who holds only the file |
+| Insert a control report or session marker (no link) | Yes while the chain was running; **flagged** outside it | `MESSAGE_UNCHAINED` is a failure between the chain's first and last matched message, a warning before or after; `who` still answers from the file as written, so read the report first | anyone who holds only the file |
+| Strip the chain channel from the file, keep the witness | Yes with a witness | `WITNESS_WITHOUT_CHAIN`: a witness is a claim that a chain existed | anyone who holds only the file |
+| Relabel the chain's `session_id` so the witness matches nothing | Yes with a witness, as a failure to confirm | `WITNESS_UNMATCHED`; the session id is not inside the link hash or signature, so the checker cannot say which file the witness belongs to (spec change planned) | anyone who holds the file and the witness |
+| Rebuild the chain without signing it | Yes if the real public key is supplied | `KEY_MISMATCH`: a chain with no signatures was not produced by that key | anyone without the device key |
 | Stop recording for a while | Yes, as a gap | `GAP_UNEXPLAINED` unless a marker explains it | recorder operator |
 | Kill the recorder | Told apart from a cut **only with a witness** | `ENDING_UNMARKED` vs `ENDING_UNEXPLAINED` | same |
 | Set the clock back | Partly | `TIME_JUMP`, `CLOCK_SKEW`; witness gives an outer bound | maker |
 | Report AUTONOMOUS while a human drives through an unwatched channel | **Partly** | `CONTROL_INCONSISTENT` if the human's commands are on a recorded topic; otherwise invisible | maker |
 | Record honestly but lie in the recorder itself (fake sensor values) | **No** | nothing in a checker can; this is what signing keys and independent sensors are for | maker |
-| Back-date witness entries | No, unless the witness itself is anchored | planned: witness log anchored to public timestamp authorities | witness insider |
+| Back-date witness entries | Yes for heads that carry an RFC 3161 receipt; otherwise **no** | the receipt's signed time comes from the timestamp authority's clock (`RECEIPT_VALID`); a head without one is the recorder's word (`RECEIPT_ABSENT`). The authority's certificate chain is not validated, so a forged receipt with a self-signed certificate that names a real authority passes unless the real certificate is given with `--tsa-cert`; the report names the authority. sha1 imprints are refused | witness insider, maker |
 | Extend or rebuild the chain without the device key | Yes if the real public key is supplied or a witness exists, else **no** | signatures: the forger must sign with a different key (`KEY_MISMATCH` against the supplied key, `KEY_CHANGED` when the key switches mid-file) | anyone without the device key |
 
 ## Rules this implies for recorders

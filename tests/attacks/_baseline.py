@@ -1,0 +1,13 @@
+import sys, pathlib; sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import attacklib as A, json
+info = A.gen('base-json', encoding='json')
+info2 = A.gen('base-cdr', encoding='cdr')
+print(json.dumps(info)); print(json.dumps(info2))
+r = A.verify(info['path']); print(A.summary(r), r['peak_mb'], r['seconds'])
+r = A.verify(info2['path']); print(A.summary(r), r['peak_mb'], r['seconds'])
+h, msgs = A.read_mcap(info['path']); print(len(msgs), msgs[0].topic, msgs[0].body())
+h2, msgs2 = A.read_mcap(info2['path']); print(len(msgs2), msgs2[0].topic, msgs2[0].body())
+p = A.write_mcap(A.OUT/'base-json-roundtrip.mcap', h, msgs)
+print('roundtrip', A.summary(A.verify(p, witness=info['witness'], pubkey=info['pubkey'])))
+p = A.write_mcap(A.OUT/'base-cdr-roundtrip.mcap', h2, msgs2)
+print('roundtrip cdr', A.summary(A.verify(p, witness=info2['witness'], pubkey=info2['pubkey'])))

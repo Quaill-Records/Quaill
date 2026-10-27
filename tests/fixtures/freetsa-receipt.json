@@ -1,0 +1,10 @@
+{
+ "note": "RFC 3161 receipt from freetsa.org for one witness head of the clean demo log (quaill gen, seed 1, cdr). Used by tests/check_receipts.py; no network needed.",
+ "tsa": "https://freetsa.org/tsr",
+ "requested_at": "2026-10-27T20:23:02+00:00",
+ "session_id": "rec-0001",
+ "seq": 3786,
+ "link": "fd6f119b03a24c71b62bbcb020b7f51c11df287db0fa127a2842c4ed753d2a8f",
+ "recv_time": 1792778730000000000,
+ "tsr": "freetsa-3786.tsr"
+}

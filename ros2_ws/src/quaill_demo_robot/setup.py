@@ -25,6 +25,7 @@ setup(
             "mode_manager = quaill_demo_robot.mode_manager:main",
             "auto_driver = quaill_demo_robot.auto_driver:main",
             "fake_odom = quaill_demo_robot.fake_odom:main",
+            "scripted_teleop = quaill_demo_robot.scripted_teleop:main",
         ],
     },
 )

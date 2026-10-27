@@ -9,7 +9,7 @@ from .chain import ChainResult, load_witness, verify_chain
 from .checks.completeness import CompletenessResult, check_completeness
 from .checks.control import ControlResult, check_control
 from .checks.format import check_format
-from .checks.profile import ProfileResult, check_profile, load_profile
+from .checks.profile import ProfileResult, apply_mapping, check_profile, load_mapping, load_profile
 from .findings import NS, Finding
 from .mcapio import LogFile, UnreadableLog, read_log
 
@@ -23,6 +23,7 @@ class Report:
     profile: dict | None = None
     witness_path: str | None = None
     pubkey_path: str | None = None
+    tsa_cert_path: str | None = None
     format_findings: list[Finding] = field(default_factory=list)
     chain: ChainResult | None = None
     control: ControlResult | None = None
@@ -97,10 +98,23 @@ def default_pubkey_path(log_path: str) -> str | None:
     return None
 
 
-def run(path: str, profile_name: str | None = "quaill-control", witness_path: str | None = None, gap_seconds: float = 2.0, pubkey_path: str | None = None) -> Report:
+def run(path: str, profile_name: str | None = "quaill-control", witness_path: str | None = None, gap_seconds: float = 2.0, pubkey_path: str | None = None, tsa_cert_path: str | None = None, mapping_path: str | None = None) -> Report:
     rep = Report(path=path)
+    tsa_cert = None
+    if tsa_cert_path:
+        try:
+            from .receipts import load_tsa_cert
+
+            tsa_cert = load_tsa_cert(tsa_cert_path)
+            rep.tsa_cert_path = tsa_cert_path
+        except Exception as e:
+            rep.format_findings.append(Finding("TSA_CERT_UNREADABLE", "L1", "fail", f"TSA certificate {tsa_cert_path} could not be read: {e}; receipts were not checked against it (a typo here must not end in \"meets checks\")"))
     if profile_name and profile_name.lower() != "none":
         rep.profile = load_profile(profile_name)
+        if mapping_path:  # the fleet's own topic and field names for this profile (profiles/MAPPING.md)
+            rep.profile = apply_mapping(rep.profile, load_mapping(mapping_path))
+    elif mapping_path:
+        raise ValueError("--map needs a profile to map (--profile is 'none')")
     # keep message bytes only where a check will look inside them
     keep = set()
     if rep.profile:
@@ -117,6 +131,7 @@ def run(path: str, profile_name: str | None = "quaill-control", witness_path: st
         return rep
     log = rep.log
 
+    asked_for_witness = bool(witness_path)
     if witness_path is None:
         witness_path = default_witness_path(path)
     witness = None
@@ -124,15 +139,15 @@ def run(path: str, profile_name: str | None = "quaill-control", witness_path: st
         try:
             witness = load_witness(witness_path)
             rep.witness_path = witness_path
-        except Exception as e:
-            rep.format_findings.append(Finding("WITNESS_UNREADABLE", "L1", "warn", f"witness file {witness_path} could not be read: {e}"))
+        except Exception as e:  # a witness the caller named but the checker could not use must not end in "meets checks"
+            rep.format_findings.append(Finding("WITNESS_UNREADABLE", "L1", "fail" if asked_for_witness else "warn", f"witness file {witness_path} could not be read: {e}" + ("; the end of the log was not checked against it" if asked_for_witness else "")))
 
     if pubkey_path is None:
         pubkey_path = default_pubkey_path(path)
     rep.pubkey_path = pubkey_path or None
 
     rep.format_findings.extend(check_format(log))
-    rep.chain = verify_chain(log, witness, rep.pubkey_path)
+    rep.chain = verify_chain(log, witness, rep.pubkey_path, tsa_cert)
     rep.control = check_control(log, (rep.profile or {}).get("operator_command_topics"))
     rep.completeness = check_completeness(log, rep.chain, int(gap_seconds * NS))
     if rep.profile is not None:

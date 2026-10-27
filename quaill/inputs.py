@@ -60,6 +60,8 @@ def open_log(path: str, keep_data_topics=None) -> LogFile:
     keep = _keep(keep_data_topics)
     if p.is_dir():
         return _read_rosbag2_dir(p, keep)
+    if not p.is_file():  # a device name such as `con` on Windows "exists" but would block on read
+        raise UnreadableLog(f"not a regular file or directory: {path}")
     name = p.name.lower()
     if name.endswith((".zstd", ".zst")):
         with tempfile.TemporaryDirectory() as td:

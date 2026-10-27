@@ -36,8 +36,122 @@ def load_profile(name_or_path: str) -> dict:
     if not p.is_file():
         raise FileNotFoundError(f"profile not found: {name_or_path} (have: {', '.join(x['name'] for x in list_profiles())})")
     d = json.loads(p.read_text(encoding="utf-8"))
+    validate_profile(d, str(p))
     d.setdefault("name", p.stem)
     return d
+
+
+def validate_profile(d, source: str) -> None:
+    """Shape check with a plain message. A malformed profile is a usage error (exit 2), never a traceback."""
+
+    def bad(msg: str):
+        raise ValueError(f"profile {source}: {msg}")
+
+    def strings(v) -> bool:
+        return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+    if not isinstance(d, dict):
+        bad("must be a JSON object")
+    items = d.get("items", [])
+    if not isinstance(items, list):
+        bad("'items' must be a list")
+    for n, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            bad(f"item {n} must be an object with a 'topic'")
+        label = item.get("id") or f"#{n}"
+        if not isinstance(item.get("topic"), str) or not item["topic"]:
+            bad(f"item {label} needs a 'topic' string")
+        if not strings(item.get("fields", [])):
+            bad(f"item {label}: 'fields' must be a list of field names")
+        when = item.get("when")
+        if when is not None and (not isinstance(when, dict) or not isinstance(when.get("field"), str)):
+            bad(f"item {label}: 'when' must be an object with a 'field' name")
+    ev = d.get("events")
+    if ev is not None:
+        if not isinstance(ev, dict):
+            bad("'events' must be an object")
+        if not isinstance(ev.get("topic"), str) or not ev["topic"]:
+            bad("'events' needs a 'topic' string")
+        if "field" in ev and not isinstance(ev["field"], str):
+            bad("'events.field' must be a field name")
+        pairs = ev.get("pairs", [])
+        if not isinstance(pairs, list) or not all(isinstance(pr, list) and len(pr) == 2 for pr in pairs):
+            bad("'events.pairs' must be a list of [open, close] pairs")
+        for key in ("values", "window_values", "window_topics"):
+            if not strings(ev.get(key, [])):
+                bad(f"'events.{key}' must be a list of strings")
+        w = ev.get("window_s")
+        if w is not None and (isinstance(w, bool) or not isinstance(w, (int, float)) or w < 0):
+            bad("'events.window_s' must be a number of seconds")
+    ops = d.get("operator_command_topics")
+    if ops is not None and not strings(ops):
+        bad("'operator_command_topics' must be a list of topic patterns")
+
+
+def apply_mapping(profile: dict, mapping: dict) -> dict:
+    """Point a profile's items and events at a fleet's own topics and field names (see profiles/MAPPING.md).
+    Returns a new profile dict; the shipped file is not touched."""
+    if not isinstance(mapping, dict):
+        raise ValueError("mapping file must contain a JSON object")
+    want = mapping.get("profile")
+    if want and want != profile.get("name"):
+        raise ValueError(f"mapping is for profile {want!r}, but the profile being checked is {profile.get('name')!r}")
+    out = json.loads(json.dumps(profile))  # deep copy
+    items_map = mapping.get("items", {})
+    if not isinstance(items_map, dict):
+        raise ValueError("mapping 'items' must be an object keyed by item id")
+    by_id = {str(i.get("id")): i for i in out.get("items", [])}
+    for iid, m in items_map.items():
+        item = by_id.get(str(iid))
+        if item is None:
+            raise ValueError(f"mapping names item {iid!r}, which profile {out.get('name')!r} does not have")
+        if not isinstance(m, dict):
+            raise ValueError(f"mapping for item {iid!r} must be an object")
+        if "topic" in m:
+            item["topic"] = str(m["topic"])
+        if "required" in m:
+            item["required"] = bool(m["required"])
+        renames = m.get("fields", {})
+        if renames:
+            if not isinstance(renames, dict):
+                raise ValueError(f"mapping for item {iid!r}: 'fields' must be an object {{profile_field: your_field}}")
+            known = set(item.get("fields", [])) | ({item["when"]["field"]} if item.get("when") else set())
+            unknown = [f for f in renames if f not in known]
+            if unknown:
+                raise ValueError(f"mapping for item {iid!r} renames field(s) {', '.join(unknown)}, which the item does not have (it has: {', '.join(sorted(known)) or 'none'})")
+            item["fields"] = [str(renames.get(f, f)) for f in item.get("fields", [])]
+            if item.get("when") and item["when"].get("field") in renames:
+                item["when"] = dict(item["when"], field=str(renames[item["when"]["field"]]))
+        item["mapped"] = True
+    ev_map = mapping.get("events")
+    if ev_map:
+        ev = out.get("events")
+        if not ev:
+            raise ValueError(f"mapping has 'events' but profile {out.get('name')!r} defines no event list")
+        if "topic" in ev_map:
+            ev["topic"] = str(ev_map["topic"])
+        if "field" in ev_map:
+            ev["field"] = str(ev_map["field"])
+        if "window_topics" in ev_map:
+            ev["window_topics"] = [str(t) for t in ev_map["window_topics"]]
+        values = ev_map.get("values", {})
+        if values:
+            if not isinstance(values, dict):
+                raise ValueError("mapping 'events.values' must be an object {profile_name: your_name}")
+            ren = lambda v: str(values.get(v, v))
+            ev["values"] = [ren(v) for v in ev.get("values", [])]
+            ev["pairs"] = [[ren(a), ren(b)] for a, b in ev.get("pairs", [])]
+            ev["window_values"] = [ren(v) for v in ev.get("window_values", [])]
+    out["mapping_applied"] = True
+    validate_profile(out, f"{out.get('name')!r} with mapping applied")
+    return out
+
+
+def load_mapping(path: str) -> dict:
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"mapping file not found: {path}")
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _get(d, path: str):

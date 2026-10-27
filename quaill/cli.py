@@ -22,6 +22,7 @@ DEMO_CASES = [
     case("delivery", None, "clean log", 0),
     case("delivery", "clock-back", "recorder clock set back 40 s mid-run; chain intact", 0, "TIME_JUMP"),
     case("delivery", "sidecar-restart", "chain sidecar killed and restarted mid-bag; two chains, 10 s unchained", 0, "CHAIN_RESTART"),
+    case("delivery", "late-start", "bag started 45 s after the recorder (the usual ros2 bag record case)", 0, "CHAIN_STARTS_LATE"),
     case("delivery", "edit", "human stretch rewritten as AUTONOMOUS", 1, "MESSAGE_EDITED"),
     case("delivery", "delete", "human stretch deleted", 1, "CHAIN_BROKEN"),
     case("delivery", "delete-rechain", "deleted and chain rebuilt; only the witness can tell", 1, "WITNESS_MISMATCH"),
@@ -57,13 +58,17 @@ DEMO_CASES = [
 
 
 def cmd_verify(a) -> int:
-    rep = run(a.log, a.profile, a.witness, a.gap_seconds, a.pubkey)
+    rep = run(a.log, a.profile, a.witness, a.gap_seconds, a.pubkey, a.tsa_cert, a.map)
     if a.json:
         print(json.dumps(render_json(rep), indent=2))
     else:
         print(render_text(rep))
     if a.out:
-        Path(a.out).write_text(json.dumps(render_json(rep), indent=2), encoding="utf-8")
+        try:
+            Path(a.out).write_text(json.dumps(render_json(rep), indent=2), encoding="utf-8")
+        except OSError as e:
+            print(f"error: cannot write the report to {a.out}: {e}", file=sys.stderr)
+            return 2
     return rep.exit_code
 
 
@@ -76,6 +81,42 @@ def cmd_who(a) -> int:
 def cmd_gen(a) -> int:
     info = generate(a.out, a.scenario, a.defect, not a.no_witness, a.seed, a.duration, encoding=a.encoding, container=a.container, sign=not a.no_sign)
     print(json.dumps(info, indent=2))
+    return 0
+
+
+def cmd_stamp(a) -> int:
+    """Ask a timestamp authority for a receipt on every witness head that has none, and write the file back."""
+    from .receipts import request_receipt
+
+    p = Path(a.witness)
+    files = sorted(p.glob("*.json")) if p.is_dir() else [p]
+    total = 0
+    for f in files:
+        w = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(w, dict) or not isinstance(w.get("entries"), list):
+            if p.is_dir():
+                continue
+            raise ValueError(f"{f} has no 'entries' list")
+        n = 0
+        for e in w["entries"]:
+            if not isinstance(e, dict) or "link" not in e:
+                continue
+            if isinstance(e.get("rfc3161"), dict) and e["rfc3161"].get("tsr_der_hex") and not a.redo:
+                continue
+            try:
+                e["rfc3161"] = request_receipt(e["link"], a.tsa)
+            except (OSError, ValueError) as ex:  # unreachable authority, bad answer: say so, write nothing
+                print(f"error: {f.name} seq {e.get('seq', '?')}: no receipt from {a.tsa}: {ex}", file=sys.stderr)
+                if n:
+                    f.write_text(json.dumps(w, indent=1), encoding="utf-8")
+                    print(f"{f.name}: {n} receipt(s) written before the failure", file=sys.stderr)
+                return 2
+            n += 1
+            print(f"{f.name}: seq {e.get('seq', '?')} receipt from {a.tsa}")
+        if n:
+            f.write_text(json.dumps(w, indent=1), encoding="utf-8")
+        total += n
+    print(f"{total} receipt(s) added")
     return 0
 
 
@@ -134,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--profile", default="quaill-control", help="profile name or path; 'none' for built-in checks only")
     v.add_argument("--witness", default=None, help="witness file, or a directory of per-session witness files (default: <log>.witness.json, <bag_dir>/witness.json or <bag_dir>/witness/ if present; '' for none)")
     v.add_argument("--pubkey", default=None, help="the device's public key (PEM or hex) to verify link signatures against (default: <log>.pubkey.pem or <bag_dir>/device.pubkey.pem if present; '' for none)")
+    v.add_argument("--tsa-cert", default=None, help="the timestamp authority's certificate (PEM or DER) to check RFC 3161 receipts against, instead of the one embedded in each receipt")
+    v.add_argument("--map", default=None, help="a JSON file that points the profile's items and events at this fleet's own topics and field names (see quaill/profiles/MAPPING.md)")
     v.add_argument("--json", action="store_true", help="print JSON instead of text")
     v.add_argument("--out", default=None, help="also write the JSON report here")
     v.add_argument("--gap-seconds", type=float, default=2.0, help="silence longer than this is a gap (default 2.0)")
@@ -164,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--gap-seconds", type=float, default=2.0)
     d.add_argument("--encoding", default="both", choices=["json", "cdr", "both"])
     d.set_defaults(fn=cmd_demo)
+
+    st = sub.add_parser("stamp", help="add RFC 3161 receipts from a timestamp authority to a witness file's heads")
+    st.add_argument("witness", help="witness file, or a directory of per-session witness files")
+    st.add_argument("--tsa", default="https://freetsa.org/tsr", help="timestamp authority URL (default: freetsa.org, a public test TSA)")
+    st.add_argument("--redo", action="store_true", help="request a new receipt even for heads that already have one")
+    st.set_defaults(fn=cmd_stamp)
 
     pr = sub.add_parser("profiles", help="list the rule sets this checker can load")
     pr.set_defaults(fn=cmd_profiles)

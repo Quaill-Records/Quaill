@@ -243,7 +243,7 @@ class ChainNode(Node):
         try:
             import rfc3161ng  # type: ignore
 
-            rt = rfc3161ng.RemoteTimestamper(self.tsa_url, hashname="sha256")
+            rt = rfc3161ng.RemoteTimestamper(self.tsa_url, hashname="sha256", include_tsa_certificate=True)  # the checker needs the TSA certificate to check the signature
             tsr = rt.timestamp(data=bytes.fromhex(link_hex))
             return {"tsa": self.tsa_url, "tsr_der_hex": bytes(tsr).hex()}
         except Exception as e:
