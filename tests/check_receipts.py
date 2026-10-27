@@ -29,6 +29,14 @@ assert res.gen_time is not None and "freetsa" in res.tsa.lower(), res
 assert res.cert_source == "embedded", res
 print(f"ok: receipt valid, {res.reason}")
 
+from asn1crypto import tsp  # noqa: E402
+
+bare = tsp.TimeStampResp.load(tsr)["time_stamp_token"].dump()
+res = receipts.verify(bare, link)
+assert res.status == "valid", res
+assert receipts.verify(bare, "00" * 32).status == "invalid"
+print("ok: bare TimeStampToken (no response envelope) -> valid; wrong link -> invalid")
+
 res = receipts.verify(tsr, "00" * 32)
 assert res.status == "invalid" and "different value" in res.reason, res
 print("ok: wrong link -> invalid (imprint)")

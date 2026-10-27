@@ -28,7 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosidl_runtime_py.utilities import get_message
 
@@ -251,11 +253,11 @@ class ChainNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)  # rclpy's own Ctrl+C handler shuts the context down before CLEAN_SHUTDOWN can be published
     node = ChainNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         try:

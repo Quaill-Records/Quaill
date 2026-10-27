@@ -156,16 +156,22 @@ def verify(tsr_der: bytes, link_hex: str, tsa_cert=None) -> ReceiptResult:
     tsa_cert: a cryptography Certificate (from --tsa-cert). When given it is used instead of the one in the receipt.
     """
     try:
-        from asn1crypto import tsp
+        from asn1crypto import cms, tsp
     except Exception as e:  # pragma: no cover
         return ReceiptResult("unverified", f"asn1crypto not available ({e})")
     try:
-        resp = tsp.TimeStampResp.load(tsr_der)
-        status = resp["status"]["status"].native
-        if status not in ("granted", "granted_with_mods"):
-            texts = resp["status"]["status_string"].native if resp["status"]["status_string"] is not None else None
-            return ReceiptResult("invalid", f"TSA status {status}" + (f": {' '.join(texts)}" if texts else ""))
-        token = resp["time_stamp_token"]
+        try:
+            resp = tsp.TimeStampResp.load(tsr_der)
+            status = resp["status"]["status"].native
+        except Exception:
+            resp = None
+            token = cms.ContentInfo.load(tsr_der)  # a bare TimeStampToken (.tst), as many clients store it
+            token["content_type"].native
+        if resp is not None:
+            if status not in ("granted", "granted_with_mods"):
+                texts = resp["status"]["status_string"].native if resp["status"]["status_string"] is not None else None
+                return ReceiptResult("invalid", f"TSA status {status}" + (f": {' '.join(texts)}" if texts else ""))
+            token = resp["time_stamp_token"]
         if token is None or token["content_type"].native != "signed_data":
             return ReceiptResult("invalid", "response carries no signed timestamp token")
         sd = token["content"]
