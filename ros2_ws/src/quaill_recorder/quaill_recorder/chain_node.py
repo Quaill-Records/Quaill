@@ -66,7 +66,7 @@ class ChainNode(Node):
                 if t not in self.topics:
                     self.topics.append(t)
         self.discover = bool(self.get_parameter("discover").value)
-        self.state_dir = Path(self.get_parameter("state_dir").value)
+        self.state_dir = Path(self.get_parameter("state_dir").value).expanduser()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.state_dir / "session.json"
         self.software_version = str(self.get_parameter("software_version").value)

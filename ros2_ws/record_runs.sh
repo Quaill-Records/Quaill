@@ -45,7 +45,8 @@ fi
 say() { printf '\n== %s  (%s)\n' "$1" "$(date -u +%H:%M:%S)"; }
 
 # Every background process gets its own process group (setsid) so a "power cut" can take it and its children.
-bg() { local name=$1; shift; setsid "$@" >"$OUT/logs/$name.log" 2>&1 & echo $!; }
+# A script's background jobs start with SIGINT ignored; env --default-signal=INT restores it so `stop` acts like Ctrl+C.
+bg() { local name=$1; shift; setsid env --default-signal=INT "$@" >"$OUT/logs/$name.log" 2>&1 & echo $!; }
 alive() { kill -0 "$1" 2>/dev/null; }
 wait_log() { # file pattern seconds
   local i; for ((i = 0; i < $3 * 2; i++)); do grep -q -- "$2" "$1" 2>/dev/null && return 0; sleep 0.5; done
