@@ -60,10 +60,14 @@ class ControlResult:
         return None
 
 
-def check_control(log: LogFile, operator_patterns: list[str] | None = None) -> ControlResult:
+def check_control(log: LogFile, operator_patterns: list[str] | None = None, signed_time: dict[int, int] | None = None) -> ControlResult:
+    """signed_time: id(message) -> the time the chain's signed recv_time gives it (chain.py). A message in it is
+    placed by that time, not by the bag's log_time, so moving messages in bag time changes nothing here."""
     r = ControlResult()
     F = r.findings
     start, end = log.start, log.end
+    st = signed_time or {}
+    T = lambda m: st.get(id(m), m.log_time)
     pats = [p.lower() for p in (operator_patterns or DEFAULT_OPERATOR_PATTERNS)]
     r.operator_topics = sorted(t for t in log.topic_counts if t not in QUAILL_TOPICS and any(fnmatch.fnmatch(t.lower(), p) for p in pats))
     reports = []
@@ -74,7 +78,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None) -> C
             malformed += 1
             continue
         # CDR has no null: an empty string means "no operator" / "no reason"
-        reports.append((m.log_time, d["mode"], d.get("operator_ref") or None, d.get("reason") or None))
+        reports.append((T(m), d["mode"], d.get("operator_ref") or None, d.get("reason") or None))
     if malformed:
         F.append(Finding("CONTROL_MALFORMED", "L2", "warn", f"{malformed} control report(s) could not be parsed"))
     if not reports:
@@ -84,7 +88,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None) -> C
     reports.sort(key=lambda x: x[0])
 
     # What counts as "the robot was still running"? Any non-Quaill message.
-    activity = sorted(m.log_time for m in log.messages if m.topic not in QUAILL_TOPICS)
+    activity = sorted(T(m) for m in log.messages if m.topic not in QUAILL_TOPICS)
 
     # Heartbeat: how often does this recorder repeat the control state?
     if len(reports) >= 3:
@@ -145,7 +149,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None) -> C
     # The recorder can lie by omission: a human drives through a channel the mode flag does not watch.
     # Human command traffic during a stretch reported as not-human is the visible trace of that.
     if r.operator_topics:
-        op = sorted((m.log_time, m.hash) for m in log.messages if m.topic in r.operator_topics)
+        op = sorted((T(m), m.hash) for m in log.messages if m.topic in r.operator_topics)
         op_times = [t for t, _ in op]
         for s in segs:
             if s.who in ("human", "unknown"):

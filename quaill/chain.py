@@ -14,6 +14,7 @@ session_id. Each session's chain is verified on its own; witness entries carry t
 from __future__ import annotations
 
 import bisect
+import fnmatch
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -30,7 +31,9 @@ SKEW_TOLERANCE = 5 * NS  # sidecar clock vs bag clock on the same robot
 ANCHOR_TOLERANCE = 2 * NS  # how far a duplicate may sit from where the recorder's own clock places it, relative to a paired neighbour
 START_JITTER = NS // 4  # a restarted recorder chains nothing before its START; this only absorbs delivery jitter into the bag
 DISCOVERY_TOLERANCE = 5 * NS  # rosbag2 subscribes to a topic a moment after it appears (longer on a loaded CI runner); the sidecar may chain a few messages first
+MOVE_TOLERANCE = 2 * NS  # a message may sit this far in bag time from where its signed recv_time places it (two subscribers on one host; the same bound as ANCHOR_TOLERANCE, which real CI bags stay inside)
 NOT_EXPECTED_CHAINED = {"/rosout", "/parameter_events"}  # ROS plumbing that nobody chains
+DEFAULT_OPERATOR_PATTERNS = ["*teleop*", "*joy*", "*remote*", "*manual*", "*operator*"]  # topics that carry a human's commands (checks/control.py uses the same list)
 
 
 class ChainBuilder:
@@ -73,6 +76,8 @@ class ChainResult:
     last_link: str | None = None
     last_time: int | None = None  # recv_time of the last link of the last segment
     matched_time: dict[tuple[str, int], int] = field(default_factory=dict)  # (session, seq) -> log_time of the matched message
+    signed_time: dict[int, int] = field(default_factory=dict)  # id(message) -> where its signed recv_time places it on the bag's clock
+    moved: int = 0  # messages whose bag log_time disagrees with that placement
     witness_present: bool = False
     witnessed_through_seq: int | None = None  # in the last segment
     witnessed_through_time: int | None = None
@@ -209,10 +214,12 @@ def verify_signatures(log: LogFile, segs: list[Segment], trusted_pub: str | None
             F.append(Finding("SIGNED_ANNOUNCED", "L1", "info", f"session {s.session_id or '?'}: all {len(sig_links)} links verify against key {kid} announced inside the bag; a rebuilt chain could announce its own key, so supply the device's public key (--pubkey) or a witness to confirm it"))
 
 
-def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = None, tsa_cert=None) -> ChainResult:
+def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = None, tsa_cert=None, operator_patterns: list[str] | None = None) -> ChainResult:
     r = ChainResult()
     F = r.findings
     start = log.start
+    operator_patterns = [p.lower() for p in (operator_patterns or DEFAULT_OPERATOR_PATTERNS)]
+    moved_msgs: list[tuple[Msg, int]] = []
     chain_msgs = log.by_topic(CHAIN_TOPIC)
     if not chain_msgs:
         F.append(Finding("CHAIN_ABSENT", "L1", "info", f"no {CHAIN_TOPIC} channel: edits and deletions cannot be checked from this file"))
@@ -256,6 +263,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
 
     # 1. Each chain must be continuous and self-consistent; the recorder's clock must not run backwards.
     breaks = jumps = 0
+    jumped: set[str] = set()  # sessions whose recorder clock stepped back: its times are not a frame to judge the bag's by
     for s in segs:
         prev_seq, prev_link, prev_recv = 0, GENESIS, None
         first = s.links[0]
@@ -290,6 +298,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                     F.append(Finding("CHAIN_BROKEN", "L1", "fail", "; ".join(problems) + f" at {fmt_rel(d['recv_time'], start)}" + (f" (session {s.session_id})" if len(segs) > 1 else ""), d["recv_time"], d["recv_time"]))
             if prev_recv is not None and d["recv_time"] < prev_recv - ORDER_TOLERANCE:
                 jumps += 1
+                jumped.add(s.session_id)
                 if jumps <= 3:
                     F.append(Finding("TIME_JUMP", "L1", "warn", f"recorder clock stepped back {(prev_recv - d['recv_time']) / NS:.1f} s at link {d['seq']} (recorder time {fmt_rel(d['recv_time'], start)}); timestamps after this point cannot be taken at face value", d["recv_time"], prev_recv))
             prev_seq, prev_link, prev_recv = d["seq"], d["link"], d["recv_time"]
@@ -327,6 +336,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
         floor = start_at.get(s.session_id) if k > 0 else None
         n = len(s.links)
         times: list[int | None] = [None] * n
+        paired: list[Msg | None] = [None] * n
         # phase 1: unambiguous
         for i, d in enumerate(s.links):
             cands = pool.get(d["msg_sha256"])
@@ -335,6 +345,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 if id(m) not in taken:
                     taken.add(id(m))
                     times[i] = m.log_time
+                    paired[i] = m
         # phase 2: duplicates, bounded by the nearest anchored neighbours. Before the first anchor or after the
         # last one there is no neighbour on that side, so the bound comes from the recorder's own clock: a link
         # recorded k seconds before its anchor was received about k seconds before it, within ANCHOR_TOLERANCE.
@@ -390,23 +401,64 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 m = min((x for x in lst[c:] if id(x) not in taken), key=lambda x: abs(x.log_time - d["recv_time"]))
             taken.add(id(m))
             times[i] = m.log_time
+            paired[i] = m
             prev_anchor, prev_anchor_recv = m.log_time, d["recv_time"]
         prev_t = None
+        offsets: list[int] = []
         for i, d in enumerate(s.links):
             t = times[i]
             if t is None:
                 continue
             r.matched_time[(s.session_id, d["seq"])] = t
+            offsets.append(t - d["recv_time"])
             if prev_t is not None and t < prev_t - ORDER_TOLERANCE:
                 order_viol += 1
             prev_t = max(prev_t or t, t)
             max_skew = max(max_skew, abs(t - d["recv_time"]))
+        # 2b. Signed time. The link's recv_time is signed; the bag's log_time is not. Both clocks sit on the
+        #     same robot, so log_time - recv_time is one near-constant offset per session; the signed time of
+        #     a message is recv_time + that offset. A message whose log_time sits elsewhere was moved in bag
+        #     time (or the bag clock stepped on its own). The checks that build timelines read signed time.
+        #     A session whose recorder clock stepped back (TIME_JUMP) gives no usable frame: bag time is kept
+        #     there, and the step itself is already on the report. A forger cannot manufacture that step.
+        if offsets and s.session_id not in jumped:
+            srt = sorted(offsets)
+            offset = srt[len(srt) // 2]
+            for i, d in enumerate(s.links):
+                m = paired[i]
+                if m is None:
+                    continue
+                st = d["recv_time"] + offset
+                r.signed_time[id(m)] = st
+                if abs(m.log_time - st) > MOVE_TOLERANCE:
+                    moved_msgs.append((m, m.log_time - st))
     uncovered = [m for ms in pool.values() for m in ms if id(m) not in taken]
     uncovered.sort(key=lambda m: m.log_time)
     if order_viol:
         F.append(Finding("TIME_ORDER", "L1", "warn", f"{order_viol} message(s) carry a log time earlier than messages chained before them (bag order and recorder order disagree by more than {ORDER_TOLERANCE / NS:.0f} s)"))
     if max_skew > SKEW_TOLERANCE:
         F.append(Finding("CLOCK_SKEW", "L1", "warn", f"recorder clock and bag clock differ by up to {max_skew / NS:.1f} s"))
+    if moved_msgs:
+        r.moved = len(moved_msgs)
+        by_topic_m: dict[str, list[int]] = defaultdict(list)
+        worst = 0
+        for m, delta in moved_msgs:
+            by_topic_m[m.topic].append(m.log_time)
+            worst = max(worst, abs(delta))
+        decisive = [t for t in by_topic_m if t in (CONTROL_TOPIC, SESSION_TOPIC) or any(fnmatch.fnmatch(t.lower(), p) for p in operator_patterns)]
+        F.append(
+            Finding(
+                "TIME_MOVED",
+                "L1",
+                "fail" if decisive else "warn",
+                f"{len(moved_msgs)} message(s) carry a bag log time that disagrees with the signed recorder time by up to {worst / NS:.1f} s ("
+                + "; ".join(f"{len(ts)} on {t}, {_span(ts, start)}" for t, ts in sorted(by_topic_m.items()))
+                + "): the times in the file were changed after recording, or the bag's clock stepped on its own; the control and completeness timelines use the signed times"
+                + (", so what the file says about who was in control cannot be read as written" if decisive else ""),
+                min(min(ts) for ts in by_topic_m.values()),
+                max(max(ts) for ts in by_topic_m.values()),
+            )
+        )
 
     # 3. A link with no message. In order: chained before the bag held anything from this session (the bag
     #    started late: flagged, not decided); an unchained message on the same topic in the same window (an

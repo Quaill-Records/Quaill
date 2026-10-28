@@ -147,8 +147,9 @@ def run(path: str, profile_name: str | None = "quaill-control", witness_path: st
     rep.pubkey_path = pubkey_path or None
 
     rep.format_findings.extend(check_format(log))
-    rep.chain = verify_chain(log, witness, rep.pubkey_path, tsa_cert)
-    rep.control = check_control(log, (rep.profile or {}).get("operator_command_topics"))
+    op_topics = (rep.profile or {}).get("operator_command_topics")
+    rep.chain = verify_chain(log, witness, rep.pubkey_path, tsa_cert, op_topics)
+    rep.control = check_control(log, op_topics, rep.chain.signed_time)
     rep.completeness = check_completeness(log, rep.chain, int(gap_seconds * NS))
     if rep.profile is not None:
         rep.profile_result = check_profile(log, rep.profile)

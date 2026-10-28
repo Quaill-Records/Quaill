@@ -23,11 +23,11 @@ Each script writes `results-<name>.json` (one row per attack: `attack`, `expecte
 
 | Suite | Rows | OK | DESIGN-GAP | BUG | What it does |
 |---|---|---|---|---|---|
-| `forgery.py` | 78 (39 attacks × JSON and CDR) | 66 | 12 | 0 | edits, deletions, insertions, reorders, truncations, chain rebuilds with and without the device key, session relabels, witness and key swaps, cross-file splices |
+| `forgery.py` | 78 (39 attacks × JSON and CDR) | 70 | 8 | 0 | edits, deletions, insertions, reorders, truncations, chain rebuilds with and without the device key, session relabels, witness and key swaps, cross-file splices |
 | `robustness.py` | 117 | 117 | 0 | 0 | empty, truncated and garbage files in every container; malformed chain links, witness files, profiles and mappings; odd flags |
 | `receipts_attack.py` | 14 | 12 | 2 | 0 | real freetsa.org receipt moved, altered, stripped; forged receipts with a self-signed certificate; wrong `--tsa-cert`; rejection status; bogus SignerInfo |
 | `cli_ux.py` | 66 | 66 | 0 | 0 | `who --at` with every malformed time; `verify` on `.`, `D:`, `con`, `nul`, `C:\Windows`; unicode paths on a cp1252 pipe; `--profile`/`--witness`/`--pubkey`/`--tsa-cert` typos; `gen` edge cases; `stamp` against an unreachable authority |
-| `scale.py` | 13 | 12 + 1 fixed | 0 | 0 (both scale fixes were timed by hand after the fix; full rerun pending) | 10 min to 10 h synthetic logs; 5,000 to 40,000 identical messages; thousands of edits; a huge witness; see the table below |
+| `scale.py` | 14 | 14 | 0 | 0 | 10 min to 10 h synthetic logs; 5,000 to 40,000 identical messages; thousands of edits; a huge witness; see the table below |
 
 ## What the first run found, and what was changed
 
@@ -63,23 +63,23 @@ The suites' `expected` strings and verdict functions were updated to the new con
 | Append messages after the shutdown marker (within 1 s, or 3 s later) | `MESSAGE_UNCHAINED` warn (+ `ENDING_UNMARKED`/`GAP_EXPLAINED` warns), exit 0 | after the chain's last link the file alone cannot tell "added later" from "the chain node stopped first"; with a witness the end is confirmed up to the last head, not beyond | a rule that any message on a chained topic after `CLEAN_SHUTDOWN` is a fail; cheap, but a real robot can publish a few messages after the marker |
 | Insert a MANUAL report 1.5 s before START | `MESSAGE_UNCHAINED` warn + `SESSION_NO_START`, exit 0; `who --at 0` names the forged operator | before the chain began nothing covers the file | `who` and the control timeline should refuse to answer from unchained reports when a chain exists elsewhere in the file (one afternoon) |
 | Prepend a fake `CRASH_NOTE` before the first matched message | counted as a latched marker (info), exit 0 | a bag that starts late legitimately receives latched markers without their links | same as above: completeness should only accept an unchained marker as an explanation when no chain covers that time |
-| Swap two messages' log times, or move the whole human stretch by `log_time` only | `TIME_ORDER` + `CLOCK_SKEW` warns; the timeline follows the forged times (exit 1 in the swap case only through `CONTROL_INCONSISTENT`) | the signed link carries the recorder's `recv_time`; the bag's `log_time` is not signed; a 1 s order tolerance and 5 s skew tolerance are needed for honest bags | build the control timeline from the signed `recv_time` of each matched link instead of `log_time`; then moving messages in bag time changes nothing (half a day; the biggest remaining hole) |
-| Shift MANUAL reports by 4 s | nothing (inside both tolerances) | same | same |
 | Forged receipt: self-signed certificate with CN `www.freetsa.org`, no `--tsa-cert` | `RECEIPT_VALID ... from www.freetsa.org, Free TSA` | the checker verifies the signature with the certificate embedded in the receipt and does not chain it to a root; the report names the authority so a reader can supply the real certificate | validate the embedded certificate against a supplied or bundled root (a few hours with `cryptography` + a pinned root list); until then, pass `--tsa-cert` in any dispute |
 | Insider cut + rebuilt witness + forged receipts on every head | passes (same gap) | same | same; with the real freetsa certificate supplied via `--tsa-cert` it fails `RECEIPT_INVALID` (row 12 of the receipts suite) |
 
+Closed on the second pass: swapping two messages' log times, moving the whole human stretch in bag time, and shifting the MANUAL reports by 4 s are all `TIME_MOVED` failures now, because the control and completeness timelines are built from the signed `recv_time` of each matched link (shifted by the session's one clock offset) instead of the bag's `log_time`; `who --at` answers from the signed times. The move tolerance is 2 s, the same bound the duplicate pairing uses. A session whose recorder clock stepped back keeps bag time, since that step is already reported and cannot be forged without the device key. Also on that pass: an MCAP that ends before its first complete record is reported as such, with the file size, instead of a bare `EndOfFile`.
+
 Also known, not a suite row: `session_id` is not part of the link hash or signature, so a relabeled chain is caught only when a witness is supplied (`WITNESS_UNMATCHED`); putting it inside the hash is a spec change for v0.1 and a connector change.
 
-## Scale (rerun after the fixes, on a laptop; the run before the fixes was within a few seconds of these)
+## Scale (full rerun after both fixes, on a laptop)
 
 | Synthetic log | Size | Verify with witness | Verify without | Peak memory (with witness) |
 |---|---|---|---|---|
-| 10 min | 1 MB | 1.9 s | 1.0 s | 54 MB |
-| 30 min | 4 MB | 2.2 s | 2.0 s | 98 MB |
-| 1 h | 8 MB | 3.8 s | 3.0 s | 162 MB |
-| 2 h | 17 MB | 7.9 s | 5.8 s | 292 MB |
-| 10 h | 84 MB | 92.7 s | 28.8 s | 1,360 MB |
+| 10 min | 1 MB | 4.8 s | 4.6 s | 54 MB |
+| 30 min | 4 MB | 4.9 s | 3.5 s | 98 MB |
+| 1 h | 8 MB | 5.6 s | 5.2 s | 165 MB |
+| 2 h | 17 MB | 6.5 s | 6.6 s | 297 MB |
+| 10 h | 84 MB | 31.8 s | 30.7 s | 1,388 MB |
 
-Also in the suite: 5,000 to 40,000 identical chained messages (a parked robot publishing the same command), thousands of edited messages, and a witness with tens of thousands of entries. The identical-message case was quadratic before the fix (row 19 above) and is about 1 s at 40,000 now.
+Also in the suite: 5,000 to 40,000 identical chained messages (a parked robot publishing the same command), thousands of edited messages, and a witness with tens of thousands of entries. The identical-message case was quadratic before the fix (row 19 above) and is 1.0 s at 40,000 now (5k 0.5 s, 10k 0.5 s, 20k 0.7 s, 40k 1.0 s). The 19,200-entry witness against the 10-hour log takes 29.6 s (row 20); before the fix it did not finish in 6 minutes. The with-witness and without-witness times are now within a second of each other on every size.
 
 Memory grows with message count (one entry per message plus the witness pairing), not with bytes. A real fleet bag of several gigabytes will not fit in RAM on a laptop; constant-memory streaming is the fix and is on the list for when someone sends a bag that big.

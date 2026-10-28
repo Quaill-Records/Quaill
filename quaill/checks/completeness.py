@@ -47,6 +47,8 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
     if not msgs:
         return r
     start, end = log.start, log.end
+    st = chain.signed_time  # messages the chain places by their signed recv_time (chain.py); the rest keep the bag's log_time
+    T = lambda m: st.get(id(m), m.log_time)
 
     events = []
     malformed = 0
@@ -55,7 +57,7 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
         if not isinstance(d, dict) or not d.get("event"):
             malformed += 1
             continue
-        ev = {"t": m.log_time, "event": d["event"], "session_id": d.get("session_id") or None, "prev_session_id": d.get("prev_session_id") or None, "software_version": d.get("software_version") or None, "note": d.get("note") or None}
+        ev = {"t": T(m), "event": d["event"], "session_id": d.get("session_id") or None, "prev_session_id": d.get("prev_session_id") or None, "software_version": d.get("software_version") or None, "note": d.get("note") or None}
         events.append(ev)
         r.sessions.append(ev)
     if malformed:
@@ -72,7 +74,7 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
                 return e
         return None
 
-    times = [m.log_time for m in msgs]
+    times = sorted(T(m) for m in msgs)
     for a, b in zip(times, times[1:]):
         if b - a <= gap_threshold_ns:
             continue

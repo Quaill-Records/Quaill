@@ -36,6 +36,7 @@ DEMO_CASES = [
     case("delivery", "no-operator", "human in control, nobody named", 1, "OPERATOR_MISSING"),
     case("delivery", "handover-back-missing", "control reports stop after takeover", 1, "CONTROL_UNKNOWN"),
     case("delivery", "hidden-teleop", "human drove via teleop while reports said AUTONOMOUS (mode source lied)", 1, "CONTROL_INCONSISTENT"),
+    case("delivery", "move-human", "human stretch moved to the bumper contact in bag time only; signed times put it back", 1, "TIME_MOVED"),
     # signatures: what a device key buys without a witness
     case("delivery", None, "clean, no witness, device key supplied: signed and trusted, end unverified", 0, "SIGNED_TRUSTED", witness=False),
     case("delivery", "rechain-nokey", "thorough outsider forgery, own key; device key supplied, no witness", 1, "KEY_MISMATCH", witness=False),
@@ -44,6 +45,9 @@ DEMO_CASES = [
     case("remote-vehicle", None, "clean StVFernLV log", 0, profile="stvfernlv-anlage3", encodings=("json",)),
     case("remote-vehicle", "unpaired", "remote driving never ended", 1, "PROFILE_EVENT_UNPAIRED", profile="stvfernlv-anlage3", encodings=("json",)),
     case("remote-vehicle", "window", "no telemetry in the 10 s before a fault", 1, "PROFILE_WINDOW_INCOMPLETE", profile="stvfernlv-anlage3", encodings=("json",)),
+    case("alks-vehicle", None, "clean UN R157 DSSAD occurrence list", 0, profile="un-r157-dssad", encodings=("json",)),
+    case("alks-vehicle", "unpaired", "second ACTIVATION never closed by a DEACTIVATION entry", 1, "PROFILE_EVENT_UNPAIRED", profile="un-r157-dssad", encodings=("json",)),
+    case("alks-vehicle", "no-version", "DSSAD entries carry no software version (8.3.2)", 1, "PROFILE_FIELD_MISSING", profile="un-r157-dssad", encodings=("json",)),
     # the same log in the containers real robots produce (cdr only)
     case("delivery", None, "rosbag2 directory, mcap storage", 0, encodings=("cdr",), container="rosbag2-mcap"),
     case("delivery", None, "rosbag2 directory split in 2 mcap files; chain spans both", 0, encodings=("cdr",), container="rosbag2-mcap-split"),

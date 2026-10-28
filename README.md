@@ -61,7 +61,7 @@ pip install quaill
 quaill demo demo-logs
 ```
 
-That generates 54 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`.
+That generates 59 test logs, plants defects, writes them in every container real robots produce, and checks each one. The table at the end must say `all as expected`.
 
 From a clone of this repository, `pip install -r requirements.txt` and `python -m quaill` work the same way, and
 
@@ -96,7 +96,7 @@ The witness is picked up automatically from `<log>.witness.json`, `<bag_dir>/wit
 
 Not read: PX4 ULog, proprietary formats, protobuf-encoded MCAP (planned: `mcap-protobuf-support`).
 
-Memory: payload messages keep only a hash and times; bytes are kept for the Quaill channels and for topics a profile looks into. A multi-gigabyte bag still means a multi-million-entry list in memory, so this is "streams the bytes", not yet "constant memory". Measured on a laptop with synthetic logs: a 2-hour, 17 MB log verifies in 8 s using 290 MB; a 10-hour, 84 MB log in 85 s using 1.4 GB with a witness (29 s without). A fleet bag of several gigabytes will not fit yet.
+Memory: payload messages keep only a hash and times; bytes are kept for the Quaill channels and for topics a profile looks into. A multi-gigabyte bag still means a multi-million-entry list in memory, so this is "streams the bytes", not yet "constant memory". Measured on a laptop with synthetic logs: a 2-hour, 17 MB log verifies in 7 s using 300 MB; a 10-hour, 84 MB log in 32 s using 1.4 GB, with or without a witness. A fleet bag of several gigabytes will not fit yet.
 
 ## Levels
 
@@ -120,7 +120,7 @@ Three channels added next to whatever the robot already records. Nothing in the 
 | `/quaill/session` | `quaill_msgs/SessionEvent` | `START`, `CLEAN_SHUTDOWN`, `CRASH_NOTE`, `POWER_LOST`, with `session_id` and `software_version` | car EDRs, flight recorders |
 | `/quaill/chain` | `quaill_msgs/ChainLink` | one link per message on every other channel: `session_id`, `seq`, `topic`, `msg_sha256 = sha256(topic ‖ 0 ‖ bytes)`, `prev`, `link = sha256(prev ‖ msg_sha256 ‖ seq ‖ recv_time ‖ topic)`, `recv_time`, plus `key_id` and `sig` (Ed25519 over the link, by the device key) | hash chain + per-link signature |
 
-**Pairing is by content, not by time.** The sidecar that publishes links never sees the `log_time` rosbag2 stamps on the original message, so the link carries the content hash and the sidecar's own receive time. The checker pairs unique hashes first, then places duplicate messages (a stopped robot publishes thousands of identical commands) inside the time window their already-paired neighbours define. The two clocks become evidence: `TIME_JUMP` when the recorder clock steps back, `CLOCK_SKEW` when recorder and bag clocks disagree, `TIME_ORDER` when bag order and chain order disagree.
+**Pairing is by content, not by time.** The sidecar that publishes links never sees the `log_time` rosbag2 stamps on the original message, so the link carries the content hash and the sidecar's own receive time. The checker pairs unique hashes first, then places duplicate messages (a stopped robot publishes thousands of identical commands) inside the time window their already-paired neighbours define. The two clocks become evidence: `TIME_JUMP` when the recorder clock steps back, `CLOCK_SKEW` when recorder and bag clocks disagree, `TIME_ORDER` when bag order and chain order disagree. The link's `recv_time` is signed and the bag's `log_time` is not, so the control and completeness timelines are built from the signed time: each matched message is placed at its link's `recv_time`, shifted by the session's one clock offset (both clocks sit on the same robot). A message whose bag time sits more than 2 s from that placement is `TIME_MOVED`, a failure when it is a control report, a session marker or an operator command, a warning otherwise. Re-stamping the human stretch in bag time therefore changes nothing in `who`; the report says the times were moved. A session whose recorder clock stepped back (`TIME_JUMP`) offers no frame to judge the bag by, so bag time is kept there and the step itself is on the report; a forger cannot manufacture that step without the device key.
 
 **Sessions.** A sidecar that dies and restarts mid-bag starts a new chain under a new `session_id`; the checker verifies each session's chain on its own (`CHAIN_RESTART`) and witness files are per session.
 
@@ -136,15 +136,16 @@ Profiles are JSON files in `quaill/profiles/`:
 
 - `quaill-control`: our addition (who was in control, session markers, chain).
 - `stvfernlv-anlage3`: Germany's remote-driving regulation, Anlage 3, 15 items + 6 event types + the 10 s window rule. **Draft mapping onto MCAP, not an official schema**; needs a German-reading reviewer.
+- `un-r157-dssad`: UN Regulation No 157 (automated lane keeping), paragraph 8, the Data Storage System for Automated Driving: one entry per occurrence (activation, deactivation with its reason, transition demand with its reason, emergency manoeuvre start and end, EDR trigger, collision, minimum risk manoeuvre, failures), each with date, timestamp and timezone, and the software version present at the time. Activation/deactivation and emergency-manoeuvre start/end are paired. **Draft mapping onto MCAP with placeholder topic and field names**; a maker points them at its own export with `--map`. The storage, overwrite and anti-tamper requirements of 8.4 and 8.5 are properties of the vehicle, not of one export, and are not checked.
 
-Any future field list (UN R157 DSSAD, ISO/IEC 24970, EN 50742 tracing log) is another JSON file, not new code.
+Any future field list (ISO/IEC 24970, EN 50742 tracing log) is another JSON file, not new code.
 
 ## The connector (ROS 2)
 
 `ros2_ws/src/` holds three packages, written for ROS 2 Jazzy, **run on real ROS 2 Jazzy in CI** (see below); not on a physical robot yet:
 
 - `quaill_msgs`: the three message types.
-- `quaill_recorder`: the sidecar. `chain` subscribes raw to configured (or all discovered) topics, hashes the exact bytes the publisher sent, publishes one `ChainLink` per message, writes `START` / `CLEAN_SHUTDOWN` / `CRASH_NOTE` markers (a dirty state file after `kill -9` triggers the crash note on the next start), and writes witness heads every 10 s, with an optional RFC 3161 receipt per head. `control_mode` turns a mode source (a String topic or Autoware's `ControlModeReport`) into standard reports with a heartbeat.
+- `quaill_recorder`: the sidecar. `chain` subscribes raw to configured (or all discovered) topics, hashes the exact bytes the publisher sent, publishes one `ChainLink` per message, writes `START` / `CLEAN_SHUTDOWN` / `CRASH_NOTE` markers (a dirty state file after `kill -9` triggers the crash note on the next start), and writes witness heads every 10 s, with an optional RFC 3161 receipt per head. `control_mode` turns a mode source (a String topic, Autoware's `ControlModeReport`, or Autoware's `OperationModeState` with LOCAL and REMOTE both mapped to MANUAL and told apart in the reason and the operator reference) into standard reports with a heartbeat.
 - `quaill_demo_robot`: a fake robot with real handovers. `mode_manager` decides whose `/cmd_vel` reaches the robot (autonomy or `teleop_twist_keyboard`) and is therefore the node that reports who is driving. No simulator needed.
 
 `ros2_ws/record_runs.sh` records the test bags on a real ROS 2 Jazzy system with nobody at a keyboard: the fake robot, both sidecars, `ros2 bag record`, a scripted operator (`scripted_teleop`) taking over twice, then a bag with no Quaill nodes at all, a killed recorder, a killed-and-restarted sidecar, and a power cut. `ros2_ws/summarize_runs.py` turns the checker's reports into one table. The workflow in `.github/workflows/ros2-run.yml` does all of that on a plain Ubuntu 24.04 runner and keeps the bags, witness files and reports as a downloadable artifact. Real ROS 2 and real bags; not a physical robot.
@@ -155,7 +156,7 @@ The one question only a real recording could settle was whether rosbag2 stores e
 
 Proves: every planted defect is caught in both encodings and in every container; clean logs pass; the checker reads real `ros2msg`/CDR bags, rosbag2 directories (mcap and sqlite3, split, compressed), single `.db3` files and ROS 1 bags; the witness logic separates "recorder died" from "end was cut"; the sidecar and the checker hash identically.
 
-Does not prove: anything about a real robot. All 54 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product. The CI recordings above come from real ROS 2 and real `ros2 bag record` with a fake robot; nothing has run on a physical robot yet.
+Does not prove: anything about a real robot. All 59 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product. The CI recordings above come from real ROS 2 and real `ros2 bag record` with a fake robot; nothing has run on a physical robot yet.
 
 ## Other pages
 
@@ -195,6 +196,6 @@ Does not prove: anything about a real robot. All 54 logs come from the synthetic
     chain.py            hash chain build + verify (content pairing, sessions, signatures) + witness + clock checks
     gen.py              synthetic generator (two scenarios, seventeen defects, json or cdr, six containers, plus a ROS 1 bag)
     checks\             format (L0), control (L2), completeness (L2), profile
-    profiles\           quaill-control.json, stvfernlv-anlage3.json
+    profiles\           quaill-control.json, stvfernlv-anlage3.json, un-r157-dssad.json
   demo-logs\            output of `quaill demo`
 ```

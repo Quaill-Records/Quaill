@@ -119,7 +119,7 @@ def reorder_swap_times(msgs, encoding):
     return msgs
 
 
-run_both("reorder-swap-log-times", reorder_swap_times, "THREAT-MODEL: 'set the clock back: partly' (TIME_ORDER/CLOCK_SKEW warn); a hard fail would be better", v_exit0_gap(), who_at="6:40")
+run_both("reorder-swap-log-times", reorder_swap_times, "the two reports sit far from where their signed recv_time places them: TIME_MOVED fail, exit 1; the timeline follows the signed times", v_fail_with("TIME_MOVED"), who_at="6:40")
 
 
 def duplicate_message(msgs, encoding):
@@ -282,7 +282,7 @@ def move_human_stretch(msgs, encoding):
     return out
 
 
-run_both("move-human-stretch-log_time-only", move_human_stretch, "recv_time in the signed link disagrees with log_time by 340 s: CLOCK_SKEW/TIME_ORDER are warns -> exit 0, timeline follows the forged times", v_exit0_gap(), who_at="1:15")
+run_both("move-human-stretch-log_time-only", move_human_stretch, "every moved message disagrees with its signed recv_time by 340 s: TIME_MOVED fail, exit 1; who --at 1:15 still answers from the signed times", v_fail_with("TIME_MOVED"), who_at="1:15")
 
 
 def shift_human_stretch_4s(msgs, encoding):
@@ -295,7 +295,7 @@ def shift_human_stretch_4s(msgs, encoding):
     return out
 
 
-run_both("shift-MANUAL-reports-4s", shift_human_stretch_4s, "inside the 5 s skew tolerance and 1 s order tolerance: no finding at all", lambda r: "DESIGN-GAP" if r["exit"] == 0 and "CLOCK_SKEW" not in r["codes"] and "TIME_ORDER" not in r["codes"] else "OK")
+run_both("shift-MANUAL-reports-4s", shift_human_stretch_4s, "4 s is outside the 2 s move tolerance: TIME_MOVED fail, exit 1", v_fail_with("TIME_MOVED"))
 
 
 def truncate_mid_message(encoding):

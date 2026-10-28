@@ -134,6 +134,8 @@ def _iter_mcap(p: Path, keep: set[str], message_zstd: bool = False):
                 collect(NonSeekingReader(f), False)
         except Exception as e2:
             if not msgs:
+                if type(e).__name__ == "EndOfFile" or p.stat().st_size <= len(MAGIC) + 64:
+                    raise UnreadableLog(f"file ends before any complete record ({p.stat().st_size} bytes: the MCAP header at most); the recorder was probably killed before it wrote its first chunk") from e
                 raise UnreadableLog(f"{type(e).__name__}: {e}") from e
             read_error = f"{type(e2).__name__}: {e2} (kept {len(msgs)} messages read before the error)"
         else:

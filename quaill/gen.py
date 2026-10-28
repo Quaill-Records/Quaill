@@ -4,6 +4,7 @@ Not a product and not a recommendation for how to record. It exists so the check
 with known, planted defects to be tested against. Two scenarios and two encodings:
   delivery        sidewalk delivery robot, autonomous, remote operator takes over for 30 s   (json or cdr)
   remote-vehicle  remote-driven car under Germany's StVFernLV, radio link lost, in-vehicle takeover (json)
+  alks-vehicle    car with an automated lane keeping system under UN R157: DSSAD occurrence list next to the control reports (json)
 "cdr" writes real ros2msg schemas and CDR bytes, the way rosbag2 does, so the checker is tested
 on the encoding a real robot produces.
 """
@@ -72,7 +73,9 @@ DELIVERY_DEFECTS = {
     "hidden-teleop": "a human drives via /teleop/cmd_vel from 06:00 to 06:20 but the control reports keep saying AUTONOMOUS (the mode source lied by omission); chain intact",
     "rechain-nokey": "a thorough outsider without the device key rewrites the human stretch to AUTONOMOUS, deletes the teleop traffic, rebuilds the chain with their own key and swaps the announced key; caught only if the real device key is known (--pubkey) or a witness exists",
     "truncate-nokey": "an outsider without the device key cuts the end and appends a forged shutdown signed with their own key; caught by the signature check alone",
+    "move-human": "bag log times only: the human stretch (01:00-01:30) is moved to 06:40-07:10, just after the bumper contact, and the messages that were there are moved to 01:00; bytes and chain links untouched, so the signed receive times still say where everything was",
 }
+T_MOVE_A, T_MOVE_B = 400.0, 430.0  # where the human stretch lands in the move-human defect
 DEMO_SIGNER = Signer.from_seed(b"quaill demo device key 0001") if CRYPTO else None
 ATTACKER_SIGNER = Signer.from_seed(b"someone without the device key") if CRYPTO else None
 T_SIDECAR_DOWN, T_SIDECAR_UP = 200.0, 210.0
@@ -82,7 +85,11 @@ VEHICLE_DEFECTS = {
     "unpaired": "REMOTE_DRIVING_END never written after REMOTE_DRIVING_START",
     "window": "telemetry missing for the 10 s before the radio-link FAULT at 02:30",
 }
-SCENARIOS = {"delivery": DELIVERY_DEFECTS, "remote-vehicle": VEHICLE_DEFECTS}
+ALKS_DEFECTS = {
+    "unpaired": "the second ACTIVATION is never followed by a DEACTIVATION entry, although the control reports show the driver taking over",
+    "no-version": "DSSAD entries carry no software version (R157 8.3.2)",
+}
+SCENARIOS = {"delivery": DELIVERY_DEFECTS, "remote-vehicle": VEHICLE_DEFECTS, "alks-vehicle": ALKS_DEFECTS}
 ENCODINGS = ("json", "cdr")
 CONTAINERS = {
     "mcap": "single .mcap file (rosbag2 Iron+, Foxglove, mcap CLI)",
@@ -286,6 +293,69 @@ def vehicle_records(defect: str | None, duration: float, seed: int, start: int, 
     return R
 
 
+# alks-vehicle timeline, seconds from start
+A_ACT1, A_TD, A_DEACT1, A_ACT2, A_EM_START, A_EM_END, A_DEACT2 = 20.0, 150.0, 158.0, 200.0, 240.0, 244.0, 270.0
+
+
+def alks_records(defect: str | None, duration: float, seed: int, start: int, pubkey_hex: str | None = None) -> list[Rec]:
+    # A car with an automated lane keeping system (UN R157). The DSSAD occurrence list is one topic; the
+    # control reports next to it say the same thing in the Quaill layout (the driver is a seat, not a name).
+    import datetime
+
+    rng = random.Random(seed)
+    S = lambda s: start + int(round(s * NS))
+    R: list[Rec] = []
+
+    def add(t: float, topic: str, payload: dict, order: int = 2):
+        R.append(Rec(S(t), order, topic, payload))
+
+    end = float(duration)
+    sw = "ALKS-SW 3.1.7 (R157SWIN 0157-0042)"
+    add(0, SESSION_TOPIC, _session("START", "alks-001", sw, note=LIBRARY, device_pubkey=pubkey_hex), 0)
+    add(end, SESSION_TOPIC, _session("CLEAN_SHUTDOWN", "alks-001", sw), 0)
+
+    occurrences = [
+        (A_ACT1, "ACTIVATION", None),
+        (A_TD, "TRANSITION_DEMAND", "PLANNED_EVENT"),
+        (A_DEACT1, "DEACTIVATION", "OVERRIDE_STEERING"),
+        (A_ACT2, "ACTIVATION", None),
+        (A_EM_START, "EMERGENCY_MANOEUVRE_START", None),
+        (A_EM_END, "EMERGENCY_MANOEUVRE_END", None),
+        (A_DEACT2, "DEACTIVATION", "DRIVER_DEACTIVATION_MEANS"),
+    ]
+    if defect == "unpaired":
+        occurrences = [o for o in occurrences if o[0] != A_DEACT2]
+    for n, (t, occ, reason) in enumerate(occurrences, 1):
+        when = datetime.datetime.fromtimestamp(S(t) / NS, datetime.timezone.utc)
+        p = {"occurrence": occ, "reason": reason, "date": when.strftime("%Y/%m/%d"), "time": when.strftime("%H:%M:%S"), "timezone": "UTC", "sequence": n}
+        if defect != "no-version":
+            p["software_version"] = sw
+        add(t, "/dssad/occurrence", p, 1)
+
+    def mode_at(t):
+        if t < A_ACT1 or A_DEACT1 <= t < A_ACT2 or t >= A_DEACT2:
+            reason = "driver deactivated the system" if t == A_DEACT2 else ("driver took over by steering after the transition demand" if t == A_DEACT1 else ("driving manually" if t == 0 else None))
+            return MODE_MANUAL, "driver-seat", reason
+        return MODE_AUTONOMOUS, None, ("ALKS activated" if t in (A_ACT1, A_ACT2) else None)
+
+    for k in range(0, int(end) + 1):
+        t = float(k)
+        m, op, reason = mode_at(t)
+        add(t, CONTROL_TOPIC, _control(m, op, reason), 1)
+
+    speed = 0.0
+    for k in range(0, int(end * 5) + 1):
+        t = k / 5
+        target = 16.0 if A_ACT1 <= t < A_DEACT2 else 12.0
+        if A_EM_START <= t < A_EM_END:
+            target = 4.0
+        accel = max(-6.0, min(1.5, (target - speed) * 0.5))
+        speed = max(0.0, speed + accel * 0.2)
+        add(t, "/vehicle/status", {"speed_mps": round(speed, 2), "accel_long": round(accel, 2), "lane_offset_m": round(rng.uniform(-0.1, 0.1), 2), "alks_state": "ACTIVE" if mode_at(float(int(t)))[0] == MODE_AUTONOMOUS else "OFF"})
+    R.sort(key=lambda r: (r.t, r.order))
+    return R
+
+
 class Encoder:
     """Turns a payload dict into bytes for one topic, in the chosen encoding."""
 
@@ -415,6 +485,15 @@ def apply_defect(entries: list[Entry], defect: str | None, start: int, encoder: 
                 kept.insert(0, Entry(kept[0].t - NS // 100, 0, SESSION_TOPIC, e.payload, e.data, None))
                 break
         return kept
+    if defect == "move-human":
+        shift = int((T_MOVE_A - T_TAKE) * NS)
+        for e in entries:
+            if T_TAKE <= rel(e) < T_RELEASE:
+                e.t += shift
+            elif T_MOVE_A <= rel(e) < T_MOVE_B:
+                e.t -= shift
+        entries.sort(key=lambda e: (e.t, e.order))  # a careful forger re-sorts the file
+        return entries
     if defect in ("truncate", "truncate-nokey"):
         kept = [e for e in entries if rel(e) <= T_TRUNC]
         forger = signer if defect == "truncate" else ATTACKER_SIGNER  # insider keeps the real key; outsider signs with their own
@@ -595,14 +674,15 @@ def generate(out: str, scenario: str = "delivery", defect: str | None = None, wi
         raise ValueError(f"unknown scenario {scenario}; have {', '.join(SCENARIOS)}, ros1-plain")
     if defect and defect not in SCENARIOS[scenario]:
         raise ValueError(f"unknown defect {defect} for {scenario}; have {', '.join(SCENARIOS[scenario])}")
-    if scenario == "remote-vehicle" and encoding == "cdr":
-        raise ValueError("remote-vehicle scenario is json-only in this version")
+    if scenario != "delivery" and encoding == "cdr":
+        raise ValueError(f"{scenario} scenario is json-only in this version")
     if duration is None:
         duration = 600.0 if scenario == "delivery" else 300.0
     signer = DEMO_SIGNER if (sign and CRYPTO) else None
     pub_hex = signer.pub_hex() if signer else None
     encoder = Encoder(encoding)
-    records = delivery_records(defect, duration, seed, start, pub_hex) if scenario == "delivery" else vehicle_records(defect, duration, seed, start, pub_hex)
+    records_fn = {"delivery": delivery_records, "remote-vehicle": vehicle_records, "alks-vehicle": alks_records}[scenario]
+    records = records_fn(defect, duration, seed, start, pub_hex)
     entries = chain_entries(records, encoder, clock_back_shift(start) if defect == "clock-back" else None, sidecar_restart=(defect == "sidecar-restart"), start=start, signer=signer)
     wit = make_witness(entries, start, Path(out).name)  # the witness saw the honest chain
     entries = apply_defect(entries, defect, start, encoder, signer)

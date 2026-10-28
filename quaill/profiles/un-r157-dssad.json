@@ -1,0 +1,28 @@
+{
+  "name": "un-r157-dssad",
+  "version": "0.0.1",
+  "status": "draft mapping, not an official schema",
+  "title": "UN Regulation No 157 (ALKS), paragraph 8: Data Storage System for Automated Driving, one entry per occurrence",
+  "source": "UN R157 as published in OJ L 82, 9.3.2021, paragraph 8 (https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:42021X0389); the 01-series Amendment 1 (Jan 2022) has the same DSSAD wording. Occurrences from 8.2.1, data elements from 8.3.1 to 8.3.3. Whether the 2025-2026 supplements changed paragraph 8 has not been checked. The topic and field names are Quaill placeholders: a vehicle maker points them at its own export with --map.",
+  "notes": "R157 asks for an event list, not a time series: an entry each time the automated lane keeping system is activated, deactivated, hands back to the driver, suppresses driver input, starts or ends an emergency manoeuvre, triggers the EDR, detects a collision, engages a minimum risk manoeuvre, or fails. Each entry carries the occurrence, its reason where 8.2.1 lists reasons, the date, a timestamp to the second with its timezone (accuracy 1 s), and the software version present at the time (8.3.2). It does not identify the driver; data access is left to national law (1.2, 8.1). Storage capacity, first-in-first-out overwriting, crash survivability, OBD readout and anti-tampering (8.4, 8.5) are properties of the system, not of one export, so this profile cannot check them. Pairing ACTIVATION with DEACTIVATION is this profile reading 8.2.1 as: every activation ends in a deactivation entry; that is not the regulation text. EMERGENCY_MANOEUVRE_START/END pairing is explicit in the text.",
+  "items": [
+    { "id": "D1", "name": "Occurrence flag (8.3.1 a)", "topic": "/dssad/occurrence", "fields": ["occurrence"] },
+    { "id": "D2", "name": "Reason for a deactivation (8.3.1 b; 8.2.1 b i-iv)", "topic": "/dssad/occurrence", "fields": ["reason"], "when": { "field": "occurrence", "equals": "DEACTIVATION" } },
+    { "id": "D3", "name": "Reason for a transition demand (8.3.1 b; 8.2.1 c i-vii)", "topic": "/dssad/occurrence", "fields": ["reason"], "when": { "field": "occurrence", "equals": "TRANSITION_DEMAND" } },
+    { "id": "D4", "name": "Date, yyyy/mm/dd (8.3.1 c)", "topic": "/dssad/occurrence", "fields": ["date"] },
+    { "id": "D5", "name": "Timestamp hh:mm:ss with timezone, accuracy 1 s (8.3.1 d)", "topic": "/dssad/occurrence", "fields": ["time", "timezone"] },
+    { "id": "D6", "name": "Software version present at the time of the event, R157SWIN or equivalent (8.3.2)", "topic": "/dssad/occurrence", "fields": ["software_version"] },
+    { "id": "D7", "name": "Order hint when several elements share one timestamp (8.3.3)", "topic": "/dssad/occurrence", "fields": ["sequence"], "required": false }
+  ],
+  "events": {
+    "topic": "/dssad/occurrence",
+    "field": "occurrence",
+    "values": ["ACTIVATION", "DEACTIVATION", "TRANSITION_DEMAND", "DRIVER_INPUT_SUPPRESSED", "EMERGENCY_MANOEUVRE_START", "EMERGENCY_MANOEUVRE_END", "EDR_TRIGGER", "COLLISION_DETECTED", "MRM_ENGAGED", "SEVERE_ALKS_FAILURE", "SEVERE_VEHICLE_FAILURE"],
+    "pairs": [["ACTIVATION", "DEACTIVATION"], ["EMERGENCY_MANOEUVRE_START", "EMERGENCY_MANOEUVRE_END"]]
+  },
+  "reasons": {
+    "DEACTIVATION": ["DRIVER_DEACTIVATION_MEANS", "OVERRIDE_STEERING", "OVERRIDE_ACCELERATOR_HOLDING_STEERING", "OVERRIDE_BRAKE_HOLDING_STEERING"],
+    "TRANSITION_DEMAND": ["PLANNED_EVENT", "UNPLANNED_EVENT", "DRIVER_UNAVAILABILITY", "DRIVER_NOT_PRESENT_OR_UNBUCKLED", "SYSTEM_FAILURE", "OVERRIDE_BRAKE_INPUT", "OVERRIDE_ACCELERATOR_INPUT"]
+  },
+  "checks": ["format", "integrity", "control", "completeness"]
+}

@@ -6,6 +6,13 @@ Sources (parameter `source`):
             or JSON {"mode": 4, "operator_ref": "op-7f3a", "reason": "teleop input"}.
   autoware  an autoware_vehicle_msgs/ControlModeReport on `mode_topic`; mode numbers are copied 1:1,
             operator_ref comes from the `operator_ref` parameter when mode is MANUAL.
+  autoware_operation_mode
+            an autoware_adapi_v1_msgs/OperationModeState on `mode_topic` (default /api/operation_mode/state).
+            AUTONOMOUS (2) -> AUTONOMOUS while is_autoware_control_enabled, else DISENGAGED; LOCAL (3) -> MANUAL
+            with operator_ref from `operator_ref` (the person at the vehicle); REMOTE (4) -> MANUAL with
+            operator_ref from `remote_operator_ref` (the remote station); STOP (1) -> NOT_READY; UNKNOWN (0) ->
+            NO_COMMAND. The reason records which of LOCAL / REMOTE it was, so the log keeps the distinction
+            Autoware draws and the Quaill mode numbering does not.
 
 Publishes /quaill/control_mode immediately on every change and as a heartbeat at `heartbeat_hz`.
 The profile rule: whatever publishes the source should be the arbiter that decides whose commands
@@ -36,10 +43,12 @@ class ControlModeNode(Node):
         self.declare_parameter("heartbeat_hz", 1.0)
         self.declare_parameter("initial_mode", "NOT_READY")
         self.declare_parameter("operator_ref", "")
+        self.declare_parameter("remote_operator_ref", "")
 
         self.mode = NAME_TO_MODE.get(str(self.get_parameter("initial_mode").value), 6)
         self.operator_ref = ""
         self.default_operator = str(self.get_parameter("operator_ref").value)
+        self.remote_operator = str(self.get_parameter("remote_operator_ref").value) or self.default_operator
 
         qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=100, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
         self.pub = self.create_publisher(ControlModeReport, "/quaill/control_mode", qos)
@@ -50,6 +59,12 @@ class ControlModeNode(Node):
             from autoware_vehicle_msgs.msg import ControlModeReport as AwReport  # type: ignore
 
             self.create_subscription(AwReport, topic, self._on_autoware, qos)
+        elif source == "autoware_operation_mode":
+            from autoware_adapi_v1_msgs.msg import OperationModeState as AwOpMode  # type: ignore
+
+            if topic == "/quaill/mode_source":
+                topic = "/api/operation_mode/state"
+            self.create_subscription(AwOpMode, topic, self._on_autoware_operation_mode, qos)
         else:
             self.create_subscription(String, topic, self._on_string, qos)
         hz = float(self.get_parameter("heartbeat_hz").value)
@@ -84,6 +99,23 @@ class ControlModeNode(Node):
 
     def _on_autoware(self, msg) -> None:
         self._set(int(msg.mode), self.default_operator if int(msg.mode) == 4 else "", "")
+
+    def _on_autoware_operation_mode(self, msg) -> None:
+        # OperationModeState: UNKNOWN=0, STOP=1, AUTONOMOUS=2, LOCAL=3, REMOTE=4, plus is_autoware_control_enabled
+        om = int(msg.mode)
+        if om == 2:
+            if bool(getattr(msg, "is_autoware_control_enabled", True)):
+                self._set(1, "", "Autoware AUTONOMOUS")
+            else:
+                self._set(5, "", "Autoware AUTONOMOUS selected but Autoware control not enabled")
+        elif om == 3:
+            self._set(4, self.default_operator, "Autoware LOCAL: person at the vehicle")
+        elif om == 4:
+            self._set(4, self.remote_operator, "Autoware REMOTE: remote station")
+        elif om == 1:
+            self._set(6, "", "Autoware STOP")
+        else:
+            self._set(0, "", "Autoware operation mode UNKNOWN")
 
     def _publish(self, reason: str | None) -> None:
         m = ControlModeReport()
