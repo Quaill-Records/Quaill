@@ -56,7 +56,7 @@ wait_gone() { # pid seconds
   local i; for ((i = 0; i < $2 * 2; i++)); do alive "$1" || return 0; sleep 0.5; done
   echo "!! pid $1 still alive after $2 s; killing its process group" >&2; kill -9 -- "-$1" 2>/dev/null; return 0
 }
-stop() { kill -INT "$1" 2>/dev/null; wait_gone "$1" "${2:-30}"; }   # what Ctrl+C in a terminal would do
+stop() { kill -INT -- "-$1" 2>/dev/null || kill -INT "$1" 2>/dev/null; wait_gone "$1" "${2:-30}"; }   # what Ctrl+C in a terminal does: the whole process group, so `ros2 run` wrappers pass it on
 cut_power() { kill -9 -- "-$1" 2>/dev/null; }                      # no warning, no shutdown hooks
 
 launch() { # name: the fake robot plus both sidecars, via demo.launch.py

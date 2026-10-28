@@ -27,6 +27,8 @@ from .receipts import verify as verify_receipt
 LINK_KEYS = ("seq", "topic", "msg_sha256", "prev", "link", "recv_time")
 ORDER_TOLERANCE = 1 * NS  # bag log_time may differ a little from the sidecar's receive order
 SKEW_TOLERANCE = 5 * NS  # sidecar clock vs bag clock on the same robot
+ANCHOR_TOLERANCE = 2 * NS  # how far a duplicate may sit from where the recorder's own clock places it, relative to a paired neighbour
+START_JITTER = NS // 4  # a restarted recorder chains nothing before its START; this only absorbs delivery jitter into the bag
 DISCOVERY_TOLERANCE = 5 * NS  # rosbag2 subscribes to a topic a moment after it appears (longer on a loaded CI runner); the sidecar may chain a few messages first
 NOT_EXPECTED_CHAINED = {"/rosout", "/parameter_events"}  # ROS plumbing that nobody chains
 
@@ -314,7 +316,15 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
     missing: list[dict] = []
     order_viol = 0
     max_skew = 0
-    for s in segs:
+    start_at: dict[str, int] = {}
+    for m in log.by_topic(SESSION_TOPIC):
+        d = m.body()
+        if isinstance(d, dict) and d.get("event") == "START" and d.get("session_id"):
+            start_at.setdefault(d["session_id"], m.log_time)
+    for k, s in enumerate(segs):
+        # a session that starts mid-file (a restarted recorder) holds nothing before its own START marker; the
+        # first session's START may reach a bag late (it is latched), so it sets no floor
+        floor = start_at.get(s.session_id) if k > 0 else None
         n = len(s.links)
         times: list[int | None] = [None] * n
         # phase 1: unambiguous
@@ -325,17 +335,21 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 if id(m) not in taken:
                     taken.add(id(m))
                     times[i] = m.log_time
-        # phase 2: duplicates, bounded by the nearest anchored neighbours
+        # phase 2: duplicates, bounded by the nearest anchored neighbours. Before the first anchor or after the
+        # last one there is no neighbour on that side, so the bound comes from the recorder's own clock: a link
+        # recorded k seconds before its anchor was received about k seconds before it, within ANCHOR_TOLERANCE.
+        # Without that, a restarted sidecar's first links pair with identical messages from before it started.
         next_anchor: list[int | None] = [None] * n
-        nxt = None
+        next_anchor_recv: list[int | None] = [None] * n
+        nxt = nxt_recv = None
         for i in range(n - 1, -1, -1):
             if times[i] is not None:
-                nxt = times[i]
-            next_anchor[i] = nxt
-        prev_anchor = None
+                nxt, nxt_recv = times[i], s.links[i]["recv_time"]
+            next_anchor[i], next_anchor_recv[i] = nxt, nxt_recv
+        prev_anchor = prev_anchor_recv = None
         for i, d in enumerate(s.links):
             if times[i] is not None:
-                prev_anchor = times[i]
+                prev_anchor, prev_anchor_recv = times[i], d["recv_time"]
                 continue
             # pool[hash] is in log_time order and links come in seq order, so a cursor past the taken
             # prefix keeps a parked robot's 40,000 identical messages linear instead of quadratic
@@ -348,8 +362,20 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
             if c >= len(lst):
                 missing.append(d)
                 continue
-            lo = (prev_anchor if prev_anchor is not None else start) - ORDER_TOLERANCE
-            hi = (next_anchor[i] if next_anchor[i] is not None else log.end) + ORDER_TOLERANCE
+            if prev_anchor is not None:
+                lo = prev_anchor - ORDER_TOLERANCE
+            elif next_anchor[i] is not None:
+                lo = next_anchor[i] - (next_anchor_recv[i] - d["recv_time"]) - ANCHOR_TOLERANCE
+            else:
+                lo = start - ORDER_TOLERANCE
+            if floor is not None:
+                lo = max(lo, floor - START_JITTER)
+            if next_anchor[i] is not None:
+                hi = next_anchor[i] + ORDER_TOLERANCE
+            elif prev_anchor is not None:
+                hi = prev_anchor + (d["recv_time"] - prev_anchor_recv) + ANCHOR_TOLERANCE
+            else:
+                hi = log.end + ORDER_TOLERANCE
             m = None
             for j in range(c, len(lst)):  # first untaken candidate inside the window
                 mj = lst[j]
@@ -364,7 +390,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 m = min((x for x in lst[c:] if id(x) not in taken), key=lambda x: abs(x.log_time - d["recv_time"]))
             taken.add(id(m))
             times[i] = m.log_time
-            prev_anchor = m.log_time
+            prev_anchor, prev_anchor_recv = m.log_time, d["recv_time"]
         prev_t = None
         for i, d in enumerate(s.links):
             t = times[i]
@@ -484,12 +510,17 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
         if ts:
             covered.append((min(ts), max(ts)))
     earliest_matched = min(r.matched_time.values()) if r.matched_time else log.end
+    restart_starts = [start_at[s.session_id] for s in segs[1:] if s.session_id in start_at]
     counts: dict[str, int] = defaultdict(int)
     inserted: dict[str, list[int]] = defaultdict(list)
     latched = 0
+    restart_markers = 0
     for m in unchained:
         if m.topic == SESSION_TOPIC and m.log_time <= earliest_matched + ORDER_TOLERANCE:
             latched += 1  # START / CRASH_NOTE are latched: a bag that starts late still receives them, without their links
+            continue
+        if m.topic == SESSION_TOPIC and any(f - ORDER_TOLERANCE <= m.log_time <= f + ORDER_TOLERANCE for f in restart_starts):
+            restart_markers += 1  # a restarted recorder publishes CRASH_NOTE and START before it chains its own session topic
             continue
         if m.topic in (CONTROL_TOPIC, SESSION_TOPIC) and any(lo < m.log_time < hi for lo, hi in covered):
             inserted[m.topic].append(m.log_time)
@@ -497,6 +528,8 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
         counts[m.topic] += 1
     if latched:
         F.append(Finding("MESSAGE_UNCHAINED", "L1", "info", f"{latched} session marker(s) at the start of the file have no chain link in it (latched markers reach a bag that started after the recorder; their links came earlier)"))
+    if restart_markers:
+        F.append(Finding("MESSAGE_UNCHAINED", "L1", "info", f"{restart_markers} session marker(s) where a recorder session restarts have no chain link (a restarted recorder publishes CRASH_NOTE and START before it chains its own session topic)"))
     for topic, ts in inserted.items():
         F.append(
             Finding(

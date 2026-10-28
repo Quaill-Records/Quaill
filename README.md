@@ -141,7 +141,7 @@ Any future field list (UN R157 DSSAD, ISO/IEC 24970, EN 50742 tracing log) is an
 
 ## The connector (ROS 2)
 
-`ros2_ws/src/` holds three packages, written for ROS 2 Jazzy, compiled, **testing on real hardware soon**:
+`ros2_ws/src/` holds three packages, written for ROS 2 Jazzy, **run on real ROS 2 Jazzy in CI** (see below); not on a physical robot yet:
 
 - `quaill_msgs`: the three message types.
 - `quaill_recorder`: the sidecar. `chain` subscribes raw to configured (or all discovered) topics, hashes the exact bytes the publisher sent, publishes one `ChainLink` per message, writes `START` / `CLEAN_SHUTDOWN` / `CRASH_NOTE` markers (a dirty state file after `kill -9` triggers the crash note on the next start), and writes witness heads every 10 s, with an optional RFC 3161 receipt per head. `control_mode` turns a mode source (a String topic or Autoware's `ControlModeReport`) into standard reports with a heartbeat.
@@ -149,13 +149,13 @@ Any future field list (UN R157 DSSAD, ISO/IEC 24970, EN 50742 tracing log) is an
 
 `ros2_ws/record_runs.sh` records the test bags on a real ROS 2 Jazzy system with nobody at a keyboard: the fake robot, both sidecars, `ros2 bag record`, a scripted operator (`scripted_teleop`) taking over twice, then a bag with no Quaill nodes at all, a killed recorder, a killed-and-restarted sidecar, and a power cut. `ros2_ws/summarize_runs.py` turns the checker's reports into one table. The workflow in `.github/workflows/ros2-run.yml` does all of that on a plain Ubuntu 24.04 runner and keeps the bags, witness files and reports as a downloadable artifact. Real ROS 2 and real bags; not a physical robot.
 
-The one open question only a real recording settles: whether rosbag2 stores exactly the bytes the sidecar hashed. The workflow's summary answers it for each run.
+The one question only a real recording could settle was whether rosbag2 stores exactly the bytes the sidecar hashed. It does: in the first green run, every one of the clean run's 1,694 chain links matched a message in the bag by content hash (Fast DDS, `rmw_fastrtps_cpp`). The same run passed every level on the clean bag (four handovers, witnessed to the end, ending marked), and its witness heads carried valid RFC 3161 receipts from freetsa.org. The recorder-killed and power-cut bags fail, as they should. The workflow's summary repeats the check on every push.
 
 ## What the demo proves and what it does not
 
 Proves: every planted defect is caught in both encodings and in every container; clean logs pass; the checker reads real `ros2msg`/CDR bags, rosbag2 directories (mcap and sqlite3, split, compressed), single `.db3` files and ROS 1 bags; the witness logic separates "recorder died" from "end was cut"; the sidecar and the checker hash identically.
 
-Does not prove: anything about a real robot. All 54 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product.
+Does not prove: anything about a real robot. All 54 logs come from the synthetic generator in `quaill/gen.py`, a labeled reference/example recorder, not a product. The CI recordings above come from real ROS 2 and real `ros2 bag record` with a fake robot; nothing has run on a physical robot yet.
 
 ## Other pages
 
