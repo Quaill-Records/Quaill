@@ -499,16 +499,18 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
             )
         )
 
-    # Unchained messages. Inside the stretch a chain covers (bag time of its first to its last matched message),
-    # the chain node was running and saw every message on the topics it chains, so a control report or session
-    # marker without a link there was added afterwards, or the chain node never saw it: either way the control
-    # timeline cannot be read as written. Outside that stretch (before the chain began, after it ended, between
-    # two sessions) the file alone cannot say, so it is a warning.
-    covered: list[tuple[int, int]] = []
-    for s in segs:
-        ts = [t for (sid, seq), t in r.matched_time.items() if sid == s.session_id]
-        if ts:
-            covered.append((min(ts), max(ts)))
+    # Unchained messages. Inside the stretch a chain covers a topic (bag time of its first to its last matched
+    # message on that topic), the chain node was subscribed to it and saw every message, so a control report or
+    # session marker without a link there was added afterwards, or the chain node never saw it: either way the
+    # control timeline cannot be read as written. Outside that stretch (before the chain node had subscribed to
+    # the topic, after it stopped, between two sessions) the file alone cannot say, so it is a warning.
+    topic_of = {(d["session_id"], d["seq"]): d["topic"] for d in r.links}
+    per_topic: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for key, t in r.matched_time.items():
+        per_topic[(key[0], topic_of.get(key, ""))].append(t)
+    covered: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for (sid, topic), ts in per_topic.items():
+        covered[topic].append((min(ts), max(ts)))
     earliest_matched = min(r.matched_time.values()) if r.matched_time else log.end
     restart_starts = [start_at[s.session_id] for s in segs[1:] if s.session_id in start_at]
     counts: dict[str, int] = defaultdict(int)
@@ -522,7 +524,7 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
         if m.topic == SESSION_TOPIC and any(f - ORDER_TOLERANCE <= m.log_time <= f + ORDER_TOLERANCE for f in restart_starts):
             restart_markers += 1  # a restarted recorder publishes CRASH_NOTE and START before it chains its own session topic
             continue
-        if m.topic in (CONTROL_TOPIC, SESSION_TOPIC) and any(lo < m.log_time < hi for lo, hi in covered):
+        if m.topic in (CONTROL_TOPIC, SESSION_TOPIC) and any(lo < m.log_time < hi for lo, hi in covered.get(m.topic, [])):
             inserted[m.topic].append(m.log_time)
             continue
         counts[m.topic] += 1
