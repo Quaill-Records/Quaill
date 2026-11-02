@@ -408,16 +408,23 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 hi = prev_anchor + (d["recv_time"] - prev_anchor_recv) + ANCHOR_TOLERANCE
             else:
                 hi = log.end + ORDER_TOLERANCE
+            # Before the first anchor nothing below bounds the window tightly, and identical copies recorded before
+            # this session subscribed to the topic sit inside it, so take the copy nearest where the recorder's own
+            # clock places the link. Everywhere else the first untaken copy in the window is the right one.
+            expected = next_anchor[i] - (next_anchor_recv[i] - d["recv_time"]) if prev_anchor is None and next_anchor[i] is not None else None
             m = None
-            for j in range(c, len(lst)):  # first untaken candidate inside the window
+            for j in range(c, len(lst)):
                 mj = lst[j]
                 if id(mj) in taken:
                     continue
                 if mj.log_time > hi:
                     break
                 if mj.log_time >= lo:
-                    m = mj
-                    break
+                    if expected is None:
+                        m = mj
+                        break
+                    if m is None or abs(mj.log_time - expected) < abs(m.log_time - expected):
+                        m = mj
             if m is None:  # nothing in the window (bag and recorder order disagree): nearest by recorder time
                 m = min((x for x in lst[c:] if id(x) not in taken), key=lambda x: abs(x.log_time - d["recv_time"]))
             taken.add(id(m))

@@ -2,9 +2,9 @@
 and whether that is what was expected. Writes OUT_DIR/summary.md too (and appends it to the GitHub step
 summary with --github).
 
-Exit 1 when a required check fails: run1 (the clean run) must meet its checks, and run0 (no Quaill nodes) must be
-readable and graded NOT ASSESSABLE above L0 rather than failed. Every other run is reported, not required;
-the first real recordings are there to find out what happens, not to pass.
+Exit 1 when a required check fails: run1 (clean), run3 (sidecar restarted) and run4b (restart after a power cut)
+must meet their checks, and run0 (no Quaill nodes) must be readable and graded NOT ASSESSABLE above L0 rather
+than failed. A false alarm on an honest recording is a bug. run2 and run4a (recorder killed) are reported only.
 
 Standard library only.
 """
@@ -22,11 +22,11 @@ EXPECT = [
     ("run0", "quaill-control", None, ["PROFILE_TOPIC_MISSING"], "no Quaill nodes, graded against the Quaill control profile"),
     ("run0", "stvfernlv-anlage3", None, ["PROFILE_TOPIC_MISSING"], "no Quaill nodes, graded against Germany's remote-driving record"),
     ("run2", "quaill-control", None, ["FILE_NOT_FINALIZED"], "bag recorder killed -9; the sidecar ran on and stopped cleanly"),
-    ("run3", "quaill-control", None, ["CHAIN_RESTART"], "chain sidecar killed -9 and restarted 10 s later"),
+    ("run3", "quaill-control", 0, ["CHAIN_RESTART"], "chain sidecar killed -9 and restarted 10 s later"),
     ("run4a", "quaill-control", None, ["FILE_NOT_FINALIZED"], "power cut: the bag that was being written"),
-    ("run4b", "quaill-control", None, [], "after the power cut: should open with a CRASH_NOTE for the dead session"),
+    ("run4b", "quaill-control", 0, [], "after the power cut: should open with a CRASH_NOTE for the dead session"),
 ]
-REQUIRED = {("run1", "quaill-control"), ("run0", "none")}
+REQUIRED = {("run1", "quaill-control"), ("run0", "none"), ("run3", "quaill-control"), ("run4b", "quaill-control")}
 
 
 def load(out: Path, run: str, profile: str) -> dict | None:
