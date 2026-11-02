@@ -226,4 +226,31 @@ def manual_report_in_sidecar_gap(encoding):
 for e in ("json", "cdr"):
     manual_report_in_sidecar_gap(e)
 
+# ---------------------------------------------------------------- false-positive guards: shapes real CI recordings produced ------------------------------------------------
+def real_restart_bag_missed_first_links(encoding):
+    # A real restarted sidecar: the bag misses its first links while it discovers the new publisher (seen in CI: session begins at link 3).
+    info = A.gen(f"sidecar-restart-late-{encoding}", defect="sidecar-restart", encoding=encoding)
+    header, msgs = A.read_mcap(info["path"])
+    sids = []
+    for m in msgs:
+        if m.topic == CHAIN_TOPIC and m.body()["session_id"] not in sids:
+            sids.append(m.body()["session_id"])
+    kept = [m for m in msgs if not (m.topic == CHAIN_TOPIC and m.body()["session_id"] == sids[1] and m.body()["seq"] <= 2)]
+    out = A.OUT / f"restart-bag-missed-first-links-{encoding}.mcap"
+    A.write_mcap(out, header, kept)
+    r = A.verify(out, witness="", pubkey=info["pubkey"])
+    T.add(f"GUARD real restart, bag missed links 1-2 of the new session [{encoding}]", "not CHAIN_BROKEN: a restarted recorder counts from 1 again", r, "OK" if "CHAIN_BROKEN" not in r["fails"] else "BUG")
+
+
+def startup_silence(msgs, seconds):
+    # the latched START reaches the bag; everything else (and its links) only from `seconds` later
+    start = msgs[0].log_time
+    return [m for m in msgs if m.topic == SESSION_TOPIC or m.log_time >= start + int(seconds * NS)]
+
+
+for e in ("json", "cdr"):
+    real_restart_bag_missed_first_links(e)
+run_both2("GUARD latched START, other topics connect 3 s later", lambda msgs, enc: startup_silence(msgs, 3), "not GAP_UNEXPLAINED: rosbag2 subscribes topic by topic", lambda r: "OK" if "GAP_UNEXPLAINED" not in r["fails"] else "BUG", witness="")
+run_both2("START kept, first 20 s removed (messages and links)", lambda msgs, enc: startup_silence(msgs, 20), "GAP_UNEXPLAINED: too long to be discovery", v_fail_with("GAP_UNEXPLAINED"), witness="")
+
 T.dump("forgery2")

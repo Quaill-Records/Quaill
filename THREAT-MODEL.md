@@ -30,7 +30,7 @@ One page on who might fake a robot log, what each check catches against them, an
 | Delete and rebuild the whole chain | **Only with a witness** | witness head ≠ file head (`WITNESS_MISMATCH`) | anyone, including the maker, if the witness is outside |
 | Cut the end and append a forged shutdown | **Only with a witness** if the forger holds the device key and chains the marker | witness holds a later head (`TRUNCATED`) | same |
 | Cut the end and append an unchained shutdown marker (no key needed) | Yes | a shutdown marker the chain never saw does not count: `ENDING_UNEXPLAINED` (`MESSAGE_UNCHAINED` names it); the same holds for a shutdown marker planted before a gap | anyone who holds only the file |
-| Remove a stretch from the middle and relabel every later link as a new session, so each half checks on its own | Yes | only the first session in a file may begin above link 1; a later one that does is `CHAIN_BROKEN`, with or without a witness; the witness adds `TRUNCATED` | anyone who holds only the file |
+| Remove a stretch from the middle and relabel every later link as a new session, so each half checks on its own | Yes | a later session may not begin above the link where the session before it stopped (a restarted recorder counts from 1 again, and `seq` is inside the link hash); one that does is `CHAIN_BROKEN`, with or without a witness; the witness adds `TRUNCATED` | anyone who holds only the file |
 | Remove the beginning of the file | **Flagged, not decided** | a bag that started after the sidecar looks the same (`CHAIN_STARTS_LATE`, `MESSAGE_BEFORE_START`); a witness head from before the file's first link only confirms the chain existed earlier, not what it held | anyone who holds only the file |
 | Remove the first messages on one topic, or every message on it | Yes, beyond 5 s | links from inside the stretch the file covers are `MESSAGE_MISSING`; only links within 5 s before the bag's first message on that topic are allowed as a late subscription (`MESSAGE_BEFORE_START`) | anyone who holds only the file |
 | Insert a control report or session marker (no link) | Yes while the chain was running; **flagged** outside it | `MESSAGE_UNCHAINED` is a failure between the chain's first and last matched message, a warning before or after; `who` still answers from the file as written, so read the report first | anyone who holds only the file |
@@ -55,7 +55,7 @@ One page on who might fake a robot log, what each check catches against them, an
 3. Witness heads must leave the robot while it runs, to a party the maker does not control. A witness file on the robot is a convenience, not evidence.
 4. Sign links with a device key that is not stored next to the log.
 5. Write the shutdown marker from a path that survives power loss if you can (capacitor, UPS); the checker rewards the marker but cannot require hardware.
-6. Chain your own shutdown marker. A `CLEAN_SHUTDOWN` without a link is worth nothing to the checker, because anyone can append one after a cut; `quaill_recorder` chains it in-process before it exits.
+6. Chain your own shutdown marker. A `CLEAN_SHUTDOWN` without a link is worth nothing to the checker, because anyone can append one after a cut; `quaill_recorder` waits for its own subscription to hand the marker back and chains the delivered bytes before it exits.
 
 ## What the checker promises, in one sentence each
 

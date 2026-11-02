@@ -269,11 +269,12 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
     for k, s in enumerate(segs):
         prev_seq, prev_link, prev_recv = 0, GENESIS, None
         first = s.links[0]
-        if first["seq"] > 1 and k > 0:
-            # Only the FIRST session in a file may begin mid-chain (the bag started after the sidecar). A recorder
-            # that restarts while the bag runs begins a new chain at link 1. A later session that begins above
-            # link 1 is one chain whose session id was changed part-way: the cheapest way to hide a cut in the
-            # middle of a log, since each session is otherwise checked on its own.
+        if k > 0 and first["seq"] > segs[k - 1].links[-1]["seq"]:
+            # A restarted recorder counts from 1 again; the bag may miss its first few links while it discovers the
+            # new publisher, so a later session can begin a little above 1. It cannot begin above where the session
+            # before it stopped: that is one chain whose session id was changed part-way, the cheapest way to hide
+            # a cut in the middle of a log, since each session is otherwise checked on its own. seq is inside the
+            # link hash, so a forger without the key cannot renumber to get past this.
             prev_seq, prev_link = first["seq"] - 1, first["prev"]
             breaks += 1
             F.append(
@@ -281,8 +282,8 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                     "CHAIN_BROKEN",
                     "L1",
                     "fail",
-                    f"session {s.session_id or '?'} begins at link {first['seq']} ({fmt_rel(first['recv_time'], start)}) although the file already holds the session before it; "
-                    f"a restarted recorder begins at link 1, so links 1-{first['seq'] - 1} of this session were removed, or one chain's session id was changed part-way to hide a cut",
+                    f"session {s.session_id or '?'} begins at link {first['seq']} ({fmt_rel(first['recv_time'], start)}), above link {segs[k - 1].links[-1]['seq']} where the session before it stopped; "
+                    "a restarted recorder counts from 1 again, so this is one chain whose session id was changed part-way, which can hide a cut",
                     first["recv_time"],
                     first["recv_time"],
                 )

@@ -14,6 +14,7 @@ from ..findings import NS, Finding, fmt_dur, fmt_rel
 from ..mcapio import CHAIN_TOPIC, END_MARKERS, SESSION_TOPIC, LogFile
 
 MARKER_TOLERANCE = 1 * NS
+STARTUP_TOLERANCE = 5 * NS  # rosbag2 subscribes topic by topic; a latched marker can arrive this long before the rest
 
 
 @dataclass
@@ -81,12 +82,15 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
 
     unchained_note = " (a shutdown marker without a chain link is there, but the chain never saw it, so it does not count)"
     times = sorted(T(m) for m in msgs)
+    first_other = min((T(m) for m in msgs if m.topic != SESSION_TOPIC), default=None)
     for a, b in zip(times, times[1:]):
         if b - a <= gap_threshold_ns:
             continue
         before = marker_near(END_MARKERS, a, trusted=True)
         after = marker_near(("CRASH_NOTE",), b)
-        if before:
+        if b == first_other and b - a <= STARTUP_TOLERANCE:
+            expl = "the latched session marker reached the bag before it had subscribed to the other topics"
+        elif before:
             expl = f"{before['event'].lower().replace('_', ' ')} marker at {fmt_rel(a, start)}" + (f", recording resumed at {fmt_rel(b, start)}" if marker_near(("START",), b) else "")
         elif after:
             expl = f"crash: recorder restarted at {fmt_rel(b, start)} and noted that session {after.get('prev_session_id') or '?'} ended unexpectedly"

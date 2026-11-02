@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 import uuid
 from datetime import datetime, timezone
@@ -30,7 +31,6 @@ from pathlib import Path
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.serialization import serialize_message
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosidl_runtime_py.utilities import get_message
@@ -43,6 +43,7 @@ CHAIN_TOPIC = "/quaill/chain"
 SESSION_TOPIC = "/quaill/session"
 CONTROL_TOPIC = "/quaill/control_mode"
 NEVER_CHAIN = {CHAIN_TOPIC, "/rosout", "/parameter_events"}
+MARKER_WAIT_S = 2.0  # how long shutdown waits for its own CLEAN_SHUTDOWN to come back; launch sends SIGTERM after 5 s
 
 
 def _iso(ns: int) -> str:
@@ -86,6 +87,7 @@ class ChainNode(Node):
         self.key_id = ""
         self.pub_hex = ""
         self._closing = False
+        self._marker_pending = False
         if bool(self.get_parameter("sign").value):
             self._load_or_create_key(str(self.get_parameter("key_path").value) or str(self.state_dir / "device.key.pem"))
 
@@ -161,13 +163,19 @@ class ChainNode(Node):
         os.replace(tmp, self.state_path)
 
     def shutdown_clean(self) -> None:
-        # Spin has stopped, so our own subscription cannot chain this marker; chain it here from the same bytes
-        # the publisher sends. An unchained CLEAN_SHUTDOWN proves nothing to the checker (anyone can append one).
-        m = self._session_msg("CLEAN_SHUTDOWN")
+        # launch forwards Ctrl+C to a process that already got it from the terminal's process group; a second one here would lose the marker
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # Spin has stopped, so keep spinning until our own subscription hands back this marker and chains it: the
+        # chain must hash the bytes the transport delivered, like every other message. Bytes serialized here can
+        # differ from them. An unchained CLEAN_SHUTDOWN proves nothing to the checker (anyone can append one).
+        self._marker_pending = SESSION_TOPIC in self.subscribed
+        self._publish_session("CLEAN_SHUTDOWN")
+        deadline = time.monotonic() + MARKER_WAIT_S
+        while self._marker_pending and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.05)
+        if self._marker_pending:
+            self.get_logger().warning(f"CLEAN_SHUTDOWN did not come back within {MARKER_WAIT_S} s; it is in the bag without a chain link")
         self._closing = True
-        self.pub_session.publish(m)
-        if SESSION_TOPIC in self.subscribed:
-            self._chain(SESSION_TOPIC, serialize_message(m))
         self._witness_tick(final=True)
         self._write_state(clean_end=True)
         time.sleep(0.3)  # let the publisher flush before the process exits
@@ -208,6 +216,8 @@ class ChainNode(Node):
         if self._closing:
             return
         self._chain(topic, bytes(data))
+        if topic == SESSION_TOPIC:
+            self._marker_pending = False
 
     def _chain(self, topic: str, data: bytes) -> None:
         recv = self.get_clock().now().nanoseconds
