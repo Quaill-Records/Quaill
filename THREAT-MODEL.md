@@ -55,7 +55,7 @@ One page on who might fake a robot log, what each check catches against them, an
 3. Witness heads must leave the robot while it runs, to a party the maker does not control. A witness file on the robot is a convenience, not evidence.
 4. Sign links with a device key that is not stored next to the log.
 5. Write the shutdown marker from a path that survives power loss if you can (capacitor, UPS); the checker rewards the marker but cannot require hardware.
-6. Chain your own shutdown marker. A `CLEAN_SHUTDOWN` without a link is worth nothing to the checker, because anyone can append one after a cut; `quaill_recorder` waits for its own subscription to hand the marker back and chains the delivered bytes before it exits.
+6. Chain your own shutdown marker. A `CLEAN_SHUTDOWN` without a link is worth nothing to the checker, because anyone can append one after a cut; `quaill_recorder` waits for its own subscription to hand the marker back and chains it before it exits.
 
 ## What the checker promises, in one sentence each
 

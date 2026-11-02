@@ -37,7 +37,7 @@ from rosidl_runtime_py.utilities import get_message
 
 from quaill_msgs.msg import ChainLink, SessionEvent
 
-from .hashing import GENESIS, link_hash, message_hash
+from .hashing import GENESIS, as_stored, link_hash, message_hash
 
 CHAIN_TOPIC = "/quaill/chain"
 SESSION_TOPIC = "/quaill/session"
@@ -166,8 +166,8 @@ class ChainNode(Node):
         # launch forwards Ctrl+C to a process that already got it from the terminal's process group; a second one here would lose the marker
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         # Spin has stopped, so keep spinning until our own subscription hands back this marker and chains it: the
-        # chain must hash the bytes the transport delivered, like every other message. Bytes serialized here can
-        # differ from them. An unchained CLEAN_SHUTDOWN proves nothing to the checker (anyone can append one).
+        # chain goes through the same path as every other message. An unchained CLEAN_SHUTDOWN proves nothing to the
+        # checker (anyone can append one).
         self._marker_pending = SESSION_TOPIC in self.subscribed
         self._publish_session("CLEAN_SHUTDOWN")
         deadline = time.monotonic() + MARKER_WAIT_S
@@ -215,7 +215,7 @@ class ChainNode(Node):
     def _on_raw(self, topic: str, data: bytes) -> None:
         if self._closing:
             return
-        self._chain(topic, bytes(data))
+        self._chain(topic, as_stored(bytes(data)))
         if topic == SESSION_TOPIC:
             self._marker_pending = False
 

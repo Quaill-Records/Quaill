@@ -34,3 +34,16 @@ for topic, data, seq, recv in CASES:
     assert la == lb, (topic, la, lb)
     prev = la
 print(f"ok: connector and checker agree on {len(CASES)} message hashes and {len(CASES)} chained links")
+
+# A CLEAN_SHUTDOWN from a real CI run: the bag stored these 88 bytes; the sidecar, receiving its own message
+# without the wire padding, got the first 85. Both must give the hash the checker computes from the bag.
+STORED = bytes.fromhex(
+    "00010000b0fae86aaa04af2c0f000000434c45414e5f53485554444f574e00000b000000732d65656530323933320000"
+    "01000000000000000b00000064656d6f2d302e302e32000001000000000000000100000000000000"
+)
+assert len(STORED) == 88
+assert connector.as_stored(STORED[:85]) == STORED
+assert connector.as_stored(STORED) == STORED
+assert connector.as_stored(b"") == b""
+assert connector.message_hash("/quaill/session", connector.as_stored(STORED[:85])) == mcapio.message_hash("/quaill/session", STORED)
+print("ok: a message the sidecar delivers to itself hashes like the padded bytes the bag stores")

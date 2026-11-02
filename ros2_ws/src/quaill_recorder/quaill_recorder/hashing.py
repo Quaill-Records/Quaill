@@ -7,6 +7,13 @@ import hashlib
 GENESIS = "0" * 64
 
 
+def as_stored(data: bytes) -> bytes:
+    """The bytes rosbag2 will store for a CDR message. The DDS wire format pads a payload to a multiple of 4; a
+    message a process delivers to itself skips the wire and arrives without that padding (seen in CI: 85 bytes
+    received, 88 stored). Without this, anything published in the sidecar's own process fails to pair."""
+    return data + b"\0" * (-len(data) % 4)
+
+
 def message_hash(topic: str, data: bytes) -> str:
     """Content hash of one recorded message: topic and exact serialized bytes. No timestamps."""
     h = hashlib.sha256()
