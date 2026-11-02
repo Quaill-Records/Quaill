@@ -30,6 +30,7 @@ from pathlib import Path
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.serialization import serialize_message
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosidl_runtime_py.utilities import get_message
@@ -84,6 +85,7 @@ class ChainNode(Node):
         self.key = None
         self.key_id = ""
         self.pub_hex = ""
+        self._closing = False
         if bool(self.get_parameter("sign").value):
             self._load_or_create_key(str(self.get_parameter("key_path").value) or str(self.state_dir / "device.key.pem"))
 
@@ -126,7 +128,7 @@ class ChainNode(Node):
         self.get_logger().info(f"signing links with device key {self.key_id}; public key at {p.parent / 'device.pubkey.pem'}")
 
     # ---- session markers ----
-    def _publish_session(self, event: str, prev_session_id: str = "", note: str = "") -> None:
+    def _session_msg(self, event: str, prev_session_id: str = "", note: str = "") -> SessionEvent:
         m = SessionEvent()
         m.stamp = self.get_clock().now().to_msg()
         m.event = event
@@ -135,7 +137,10 @@ class ChainNode(Node):
         m.software_version = self.software_version
         m.note = note
         m.device_pubkey = self.pub_hex if event == "START" else ""
-        self.pub_session.publish(m)
+        return m
+
+    def _publish_session(self, event: str, prev_session_id: str = "", note: str = "") -> None:
+        self.pub_session.publish(self._session_msg(event, prev_session_id, note))
 
     def _start_session(self) -> None:
         prev = None
@@ -156,7 +161,13 @@ class ChainNode(Node):
         os.replace(tmp, self.state_path)
 
     def shutdown_clean(self) -> None:
-        self._publish_session("CLEAN_SHUTDOWN")
+        # Spin has stopped, so our own subscription cannot chain this marker; chain it here from the same bytes
+        # the publisher sends. An unchained CLEAN_SHUTDOWN proves nothing to the checker (anyone can append one).
+        m = self._session_msg("CLEAN_SHUTDOWN")
+        self._closing = True
+        self.pub_session.publish(m)
+        if SESSION_TOPIC in self.subscribed:
+            self._chain(SESSION_TOPIC, serialize_message(m))
         self._witness_tick(final=True)
         self._write_state(clean_end=True)
         time.sleep(0.3)  # let the publisher flush before the process exits
@@ -194,8 +205,13 @@ class ChainNode(Node):
             self.get_logger().info(f"chaining {topic} ({types[0]})")
 
     def _on_raw(self, topic: str, data: bytes) -> None:
+        if self._closing:
+            return
+        self._chain(topic, bytes(data))
+
+    def _chain(self, topic: str, data: bytes) -> None:
         recv = self.get_clock().now().nanoseconds
-        mh = message_hash(topic, bytes(data))
+        mh = message_hash(topic, data)
         self.seq += 1
         link = link_hash(self.prev, mh, self.seq, recv, topic)
         m = ChainLink()

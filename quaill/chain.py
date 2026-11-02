@@ -78,6 +78,8 @@ class ChainResult:
     matched_time: dict[tuple[str, int], int] = field(default_factory=dict)  # (session, seq) -> log_time of the matched message
     signed_time: dict[int, int] = field(default_factory=dict)  # id(message) -> where its signed recv_time places it on the bag's clock
     moved: int = 0  # messages whose bag log_time disagrees with that placement
+    matched_ids: set[int] = field(default_factory=set)  # id(message) of every message a link was paired with (any session, clock steps or not)
+    chained_topics: set[str] = field(default_factory=set)  # topics the chain holds at least one link for: the chain node was subscribed to them
     witness_present: bool = False
     witnessed_through_seq: int | None = None  # in the last segment
     witnessed_through_time: int | None = None
@@ -264,10 +266,28 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
     # 1. Each chain must be continuous and self-consistent; the recorder's clock must not run backwards.
     breaks = jumps = 0
     jumped: set[str] = set()  # sessions whose recorder clock stepped back: its times are not a frame to judge the bag's by
-    for s in segs:
+    for k, s in enumerate(segs):
         prev_seq, prev_link, prev_recv = 0, GENESIS, None
         first = s.links[0]
-        if first["seq"] > 1:  # a bag started after the sidecar (the usual case with `ros2 bag record`) begins mid-chain
+        if first["seq"] > 1 and k > 0:
+            # Only the FIRST session in a file may begin mid-chain (the bag started after the sidecar). A recorder
+            # that restarts while the bag runs begins a new chain at link 1. A later session that begins above
+            # link 1 is one chain whose session id was changed part-way: the cheapest way to hide a cut in the
+            # middle of a log, since each session is otherwise checked on its own.
+            prev_seq, prev_link = first["seq"] - 1, first["prev"]
+            breaks += 1
+            F.append(
+                Finding(
+                    "CHAIN_BROKEN",
+                    "L1",
+                    "fail",
+                    f"session {s.session_id or '?'} begins at link {first['seq']} ({fmt_rel(first['recv_time'], start)}) although the file already holds the session before it; "
+                    f"a restarted recorder begins at link 1, so links 1-{first['seq'] - 1} of this session were removed, or one chain's session id was changed part-way to hide a cut",
+                    first["recv_time"],
+                    first["recv_time"],
+                )
+            )
+        elif first["seq"] > 1:  # a bag started after the sidecar (the usual case with `ros2 bag record`) begins mid-chain
             prev_seq, prev_link = first["seq"] - 1, first["prev"]
             F.append(
                 Finding(
@@ -432,6 +452,8 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
                 r.signed_time[id(m)] = st
                 if abs(m.log_time - st) > MOVE_TOLERANCE:
                     moved_msgs.append((m, m.log_time - st))
+    r.matched_ids = set(taken)
+    r.chained_topics = {d["topic"] for d in r.links}
     uncovered = [m for ms in pool.values() for m in ms if id(m) not in taken]
     uncovered.sort(key=lambda m: m.log_time)
     if order_viol:
@@ -446,15 +468,17 @@ def verify_chain(log: LogFile, witness: dict | None, trusted_pub: str | None = N
             by_topic_m[m.topic].append(m.log_time)
             worst = max(worst, abs(delta))
         decisive = [t for t in by_topic_m if t in (CONTROL_TOPIC, SESSION_TOPIC) or any(fnmatch.fnmatch(t.lower(), p) for p in operator_patterns)]
+        # A moved message is a moved message: a bag clock that steps on its own moves every topic at once (control
+        # reports included); one incident event moved into the human stretch is as misleading as a moved handover.
         F.append(
             Finding(
                 "TIME_MOVED",
                 "L1",
-                "fail" if decisive else "warn",
+                "fail",
                 f"{len(moved_msgs)} message(s) carry a bag log time that disagrees with the signed recorder time by up to {worst / NS:.1f} s ("
                 + "; ".join(f"{len(ts)} on {t}, {_span(ts, start)}" for t, ts in sorted(by_topic_m.items()))
                 + "): the times in the file were changed after recording, or the bag's clock stepped on its own; the control and completeness timelines use the signed times"
-                + (", so what the file says about who was in control cannot be read as written" if decisive else ""),
+                + (", so what the file says about who was in control cannot be read as written" if decisive else "; what the file shows at those times cannot be read as written"),
                 min(min(ts) for ts in by_topic_m.values()),
                 max(max(ts) for ts in by_topic_m.values()),
             )

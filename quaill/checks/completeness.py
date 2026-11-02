@@ -57,7 +57,11 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
         if not isinstance(d, dict) or not d.get("event"):
             malformed += 1
             continue
-        ev = {"t": T(m), "event": d["event"], "session_id": d.get("session_id") or None, "prev_session_id": d.get("prev_session_id") or None, "software_version": d.get("software_version") or None, "note": d.get("note") or None}
+        # A shutdown marker only explains a gap or an ending if the chain saw it. START and CRASH_NOTE are
+        # legitimately unchained (latched into a late bag; published by a restarted recorder before it chains its
+        # own topic); CLEAN_SHUTDOWN and POWER_LOST are not: anyone can append one after a cut.
+        chained = None if not chain.present else (id(m) in chain.matched_ids)
+        ev = {"t": T(m), "event": d["event"], "session_id": d.get("session_id") or None, "prev_session_id": d.get("prev_session_id") or None, "software_version": d.get("software_version") or None, "note": d.get("note") or None, "chained": chained}
         events.append(ev)
         r.sessions.append(ev)
     if malformed:
@@ -68,17 +72,19 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
     elif not any(e["event"] == "START" and abs(e["t"] - start) <= MARKER_TOLERANCE for e in events):
         F.append(Finding("SESSION_NO_START", "L2", "warn", "log does not begin with a START marker"))
 
-    def marker_near(kinds, t: int) -> dict | None:
+    def marker_near(kinds, t: int, trusted: bool = False) -> dict | None:
+        """trusted: only a marker the chain saw counts (when the log has a chain)."""
         for e in events:
-            if e["event"] in kinds and abs(e["t"] - t) <= MARKER_TOLERANCE:
+            if e["event"] in kinds and abs(e["t"] - t) <= MARKER_TOLERANCE and not (trusted and e["chained"] is False):
                 return e
         return None
 
+    unchained_note = " (a shutdown marker without a chain link is there, but the chain never saw it, so it does not count)"
     times = sorted(T(m) for m in msgs)
     for a, b in zip(times, times[1:]):
         if b - a <= gap_threshold_ns:
             continue
-        before = marker_near(END_MARKERS, a)
+        before = marker_near(END_MARKERS, a, trusted=True)
         after = marker_near(("CRASH_NOTE",), b)
         if before:
             expl = f"{before['event'].lower().replace('_', ' ')} marker at {fmt_rel(a, start)}" + (f", recording resumed at {fmt_rel(b, start)}" if marker_near(("START",), b) else "")
@@ -93,18 +99,33 @@ def check_completeness(log: LogFile, chain: ChainResult, gap_threshold_ns: int =
         elif not markers:
             F.append(Finding("GAP_UNEXPLAINED", "L2", "warn", f"no messages from {fmt_rel(a, start)} to {fmt_rel(b, start)} ({fmt_dur(b - a)}); this log has no session markers that could explain it", a, b))
         else:
-            F.append(Finding("GAP_UNEXPLAINED", "L2", "fail", f"no messages from {fmt_rel(a, start)} to {fmt_rel(b, start)} ({fmt_dur(b - a)}); no shutdown marker before it and no crash note after it", a, b))
+            untrusted = marker_near(END_MARKERS, a)
+            F.append(Finding("GAP_UNEXPLAINED", "L2", "fail", f"no messages from {fmt_rel(a, start)} to {fmt_rel(b, start)} ({fmt_dur(b - a)}); no shutdown marker before it and no crash note after it" + (unchained_note if untrusted else ""), a, b))
 
     # How does the log end?
+    end_marker = marker_near(END_MARKERS, end)
     if not markers:
         r.ending = "unknown (no session markers)"
-    elif marker_near(END_MARKERS, end):
+    elif marker_near(END_MARKERS, end, trusted=True):
         r.ending = "marked"
     elif chain.truncated:
         r.ending = "cut"  # the chain finding already states it
     elif chain.complete_per_witness:
         r.ending = "unmarked, complete per witness"
-        F.append(Finding("ENDING_UNMARKED", "L2", "warn", f"log ends at {fmt_rel(end, start)} without a shutdown marker; the outside witness confirms this is where the recording stopped (recorder died or was killed)", end, end))
+        F.append(Finding("ENDING_UNMARKED", "L2", "warn", f"log ends at {fmt_rel(end, start)} without a shutdown marker the chain saw; the outside witness confirms this is where the recording stopped (recorder died or was killed)" + (unchained_note if end_marker else ""), end, end))
+    elif end_marker:
+        r.ending = "unexplained"
+        F.append(
+            Finding(
+                "ENDING_UNEXPLAINED",
+                "L2",
+                "fail",
+                f"log ends at {fmt_rel(end, start)} with a {end_marker['event']} marker that has no chain link although this log has a chain: the chain node never saw it, so it does not prove a clean stop (anyone can append one after a cut); "
+                "either the recorder died before chaining its own marker, or the end was cut and the marker was added, and there is no outside witness to tell which",
+                end,
+                end,
+            )
+        )
     else:
         r.ending = "unexplained"
         F.append(Finding("ENDING_UNEXPLAINED", "L2", "fail", f"log ends at {fmt_rel(end, start)} without a shutdown marker or crash note; either the recorder died or the end was cut, and there is no outside witness to tell which", end, end))

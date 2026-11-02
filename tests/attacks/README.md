@@ -11,6 +11,7 @@ From anywhere, with the project's Python (needs `mcap`, `cryptography`, `asn1cry
 ```
 python tests/attacks/_baseline.py        # once: writes the two base logs into tests/attacks/out/
 python tests/attacks/forgery.py          # ~2 min
+python tests/attacks/forgery2.py         # ~1 min, the second pass (below)
 python tests/attacks/robustness.py       # ~2 min
 python tests/attacks/receipts_attack.py  # seconds
 python tests/attacks/cli_ux.py           # ~4 min
@@ -24,6 +25,7 @@ Each script writes `results-<name>.json` (one row per attack: `attack`, `expecte
 | Suite | Rows | OK | DESIGN-GAP | BUG | What it does |
 |---|---|---|---|---|---|
 | `forgery.py` | 78 (39 attacks × JSON and CDR) | 70 | 8 | 0 | edits, deletions, insertions, reorders, truncations, chain rebuilds with and without the device key, session relabels, witness and key swaps, cross-file splices |
+| `forgery2.py` | 28 (14 attacks × JSON and CDR) | 23 | 5 | 0 | the third pass: a moved incident instead of a moved human, planted command traffic, a chain split in two by relabeling to hide a cut in the middle, unchained shutdown markers as explanations, a planted report inside a sidecar outage, a constant hidden command |
 | `robustness.py` | 117 | 117 | 0 | 0 | empty, truncated and garbage files in every container; malformed chain links, witness files, profiles and mappings; odd flags |
 | `receipts_attack.py` | 14 | 12 | 2 | 0 | real freetsa.org receipt moved, altered, stripped; forged receipts with a self-signed certificate; wrong `--tsa-cert`; rejection status; bogus SignerInfo |
 | `cli_ux.py` | 66 | 66 | 0 | 0 | `who --at` with every malformed time; `verify` on `.`, `D:`, `con`, `nul`, `C:\Windows`; unicode paths on a cp1252 pipe; `--profile`/`--witness`/`--pubkey`/`--tsa-cert` typos; `gen` edge cases; `stamp` against an unreachable authority |
@@ -56,13 +58,31 @@ Each script writes `results-<name>.json` (one row per attack: `attack`, `expecte
 
 The suites' `expected` strings and verdict functions were updated to the new contract (rows 6 to 12 now require the fail), so a regression shows up as `BUG`.
 
+## What the third pass found (`forgery2.py`), and what was changed
+
+Six attack families got through the checker as it stood after the second pass; each was confirmed against the threat model's promises before anything was changed, and the fix for each was checked against every suite above plus the 59-case demo.
+
+| # | Attack | Before | After | Where |
+|---|---|---|---|---|
+| 21 | Move the **incident** (one `/events` message) into the human stretch in bag time, instead of moving the human | `TIME_MOVED` **warn**, exit 0: only control, session and operator topics counted as decisive | `TIME_MOVED` fail for any moved message | `chain.py`: a bag clock that steps on its own moves every topic at once; a lone moved message is a moved message |
+| 22 | Plant eight distinct unchained `/teleop/cmd_vel` messages during an autonomous stretch ("prove" a hidden human) | `CONTROL_INCONSISTENT` fail against the maker, from messages the chain node never saw | no `CONTROL_INCONSISTENT`; `MESSAGE_UNCHAINED` warn names them | `checks/control.py`: command messages without a link on a topic the chain was covering are not evidence |
+| 23 | Remove 1.5 s around the bumper contact (messages and links), relabel every later link as a new session; no witness | exit 0, L1 PARTIAL: each half checked on its own, the second one merely `CHAIN_STARTS_LATE` | `CHAIN_BROKEN`, exit 1 | `chain.py`: only the first session in a file may begin above link 1; a restarted recorder begins at link 1 |
+| 24 | Same, with the whole second half relabeled and nothing removed; same with 2 min erased and forged `CRASH_NOTE`/`START` or `CLEAN_SHUTDOWN`/`START` markers telling a crash or clean-stop story | exit 0 | `CHAIN_BROKEN` (+ `GAP_UNEXPLAINED` for the clean-stop story) | same rule; the unchained shutdown marker no longer explains the gap |
+| 25 | Cut the end and append an **unchained, unsigned** `CLEAN_SHUTDOWN` (no key needed); no witness | exit 0: "ending marked", the cut that fails as `ENDING_UNEXPLAINED` without the marker passed with it | `ENDING_UNEXPLAINED`, exit 1 | `checks/completeness.py`: where the log has a chain, `CLEAN_SHUTDOWN`/`POWER_LOST` count only if the chain saw them; `START`/`CRASH_NOTE` stay accepted unchained (latched, or published by a restarted recorder before it chains its own topic) |
+| 26 | The real sidecar's own `CLEAN_SHUTDOWN` was unchained (published after `spin()` returned, so its own subscription never saw it): under row 25 every real recording would have failed | unchained marker | the sidecar chains the marker in-process from the same serialized bytes it publishes | `ros2_ws/.../chain_node.py`; the next CI run is the test |
+| 27 | Plant a MANUAL report inside a sidecar outage; `who --at` named the planted operator with no hint | answer given as if chained | same answer, plus a "Caution: the control report behind this answer has no chain link" line | `report.py`, `checks/control.py` (`Segment.chained`) |
+
+Guards added with them: shifting every message uniformly in bag time (a bag clock that simply differs from the recorder clock) stays exit 0, and shifting everything except the human stretch is still caught on the human stretch.
+
 ## What stays open (DESIGN-GAP), with the fix each would take
 
 | Attack | What the checker says | Why it is allowed today | Fix |
 |---|---|---|---|
 | Append messages after the shutdown marker (within 1 s, or 3 s later) | `MESSAGE_UNCHAINED` warn (+ `ENDING_UNMARKED`/`GAP_EXPLAINED` warns), exit 0 | after the chain's last link the file alone cannot tell "added later" from "the chain node stopped first"; with a witness the end is confirmed up to the last head, not beyond | a rule that any message on a chained topic after `CLEAN_SHUTDOWN` is a fail; cheap, but a real robot can publish a few messages after the marker |
-| Insert a MANUAL report 1.5 s before START | `MESSAGE_UNCHAINED` warn + `SESSION_NO_START`, exit 0; `who --at 0` names the forged operator | before the chain began nothing covers the file | `who` and the control timeline should refuse to answer from unchained reports when a chain exists elsewhere in the file (one afternoon) |
-| Prepend a fake `CRASH_NOTE` before the first matched message | counted as a latched marker (info), exit 0 | a bag that starts late legitimately receives latched markers without their links | same as above: completeness should only accept an unchained marker as an explanation when no chain covers that time |
+| Insert a MANUAL report 1.5 s before START, or inside a sidecar outage (`forgery2.py`) | `MESSAGE_UNCHAINED` warn, exit 0; `who` names the planted operator, now with a "no chain link" caution | before the chain began, or while it was down, nothing covers the file; a real sidecar outage produces exactly this shape (CI run3), so a failure here would fail honest logs | a recorder that never stops chaining (a second sidecar, or links written by the recorder itself); until then, read the caution |
+| Prepend a fake `CRASH_NOTE` before the first matched message | counted as a latched marker (info), exit 0 | a bag that starts late legitimately receives latched markers without their links; a restarted recorder publishes `CRASH_NOTE` before it chains its own topic | the restarted recorder could chain its own `CRASH_NOTE`/`START` the way it now chains `CLEAN_SHUTDOWN`; then unchained ones could fail |
+| A human holding one constant command (`forgery2.py`: 20 identical chained teleop messages while AUTONOMOUS) | not caught | below the 5-distinct-messages bar that keeps a parked joystick from firing `CONTROL_INCONSISTENT` | the mode source itself; or a per-robot threshold in the profile |
+| Delete the first 4 s of a topic's messages, keep the links (`forgery2.py`) | `MESSAGE_BEFORE_START` warn (JSON); CDR fails anyway because its identical Twist messages re-pair and `MESSAGE_MISSING`/`TIME_MOVED` fire | the 5 s late-subscription allowance per topic (rosbag2 discovers topics after they appear) | shorten the allowance once real bags show how late rosbag2 subscribes |
 | Forged receipt: self-signed certificate with CN `www.freetsa.org`, no `--tsa-cert` | `RECEIPT_VALID ... from www.freetsa.org, Free TSA` | the checker verifies the signature with the certificate embedded in the receipt and does not chain it to a root; the report names the authority so a reader can supply the real certificate | validate the embedded certificate against a supplied or bundled root (a few hours with `cryptography` + a pinned root list); until then, pass `--tsa-cert` in any dispute |
 | Insider cut + rebuilt witness + forged receipts on every head | passes (same gap) | same | same; with the real freetsa certificate supplied via `--tsa-cert` it fails `RECEIPT_INVALID` (row 12 of the receipts suite) |
 

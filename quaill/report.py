@@ -223,6 +223,8 @@ def render_who(rep: Report, at: str) -> str:
         if after:
             h = after[0]
             lines.append(f"  Next handover:     {fmt_rel(h['t'], log.start)} {h['from']} -> {h['to']}" + (f" ({h['reason']})" if h.get("reason") else ""))
+        if s.chained is False:
+            lines.append("  Caution: the control report behind this answer has no chain link although this log has a chain: it was added after recording, or written while the chain node was down. Do not rely on it alone.")
     c = rep.chain
     if c and c.present:
         if any(f.severity == "fail" for f in c.findings):

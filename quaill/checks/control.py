@@ -27,6 +27,7 @@ class Segment:
     mode_name: str
     operator_ref: str | None
     reason: str | None
+    chained: bool | None = None  # None: no chain in the log; False: the report behind this segment has no chain link
 
     @property
     def who(self) -> str:
@@ -60,14 +61,21 @@ class ControlResult:
         return None
 
 
-def check_control(log: LogFile, operator_patterns: list[str] | None = None, signed_time: dict[int, int] | None = None) -> ControlResult:
+def check_control(log: LogFile, operator_patterns: list[str] | None = None, signed_time: dict[int, int] | None = None, chain=None) -> ControlResult:
     """signed_time: id(message) -> the time the chain's signed recv_time gives it (chain.py). A message in it is
-    placed by that time, not by the bag's log_time, so moving messages in bag time changes nothing here."""
+    placed by that time, not by the bag's log_time, so moving messages in bag time changes nothing here.
+    chain: the ChainResult, when there is one. A message on a topic the chain node was subscribed to that has no
+    link was never seen by it (added afterwards, or written while the node was down); such a message is reported
+    by the chain check and is not evidence here."""
     r = ControlResult()
     F = r.findings
     start, end = log.start, log.end
     st = signed_time or {}
     T = lambda m: st.get(id(m), m.log_time)
+    has_chain = chain is not None and chain.present
+
+    def unseen(m) -> bool:
+        return has_chain and m.topic in chain.chained_topics and id(m) not in chain.matched_ids
     pats = [p.lower() for p in (operator_patterns or DEFAULT_OPERATOR_PATTERNS)]
     r.operator_topics = sorted(t for t in log.topic_counts if t not in QUAILL_TOPICS and any(fnmatch.fnmatch(t.lower(), p) for p in pats))
     reports = []
@@ -78,7 +86,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
             malformed += 1
             continue
         # CDR has no null: an empty string means "no operator" / "no reason"
-        reports.append((T(m), d["mode"], d.get("operator_ref") or None, d.get("reason") or None))
+        reports.append((T(m), d["mode"], d.get("operator_ref") or None, d.get("reason") or None, None if not has_chain else not unseen(m)))
     if malformed:
         F.append(Finding("CONTROL_MALFORMED", "L2", "warn", f"{malformed} control report(s) could not be parsed"))
     if not reports:
@@ -107,7 +115,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
         return None
 
     # Operator must be named (pseudonymously) whenever a human is in control.
-    for t, mode, op, _ in reports:
+    for t, mode, op, _, _ in reports:
         if mode in HUMAN_MODES and not op:
             F.append(Finding("OPERATOR_MISSING", "L2", "fail", f"control was MANUAL at {fmt_rel(t, start)} but no operator reference was recorded", t, t))
             break  # one finding per log is enough; the timeline shows the rest
@@ -117,7 +125,7 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
     if activity and threshold and activity[0] < reports[0][0] - threshold:
         segs.append(Segment(activity[0], reports[0][0], None, "UNKNOWN", None, "robot was logging before the first control report"))
         F.append(Finding("CONTROL_UNKNOWN", "L2", "fail", f"robot was logging from {fmt_rel(activity[0], start)} but the first control report is at {fmt_rel(reports[0][0], start)}", activity[0], reports[0][0]))
-    for i, (t, mode, op, reason) in enumerate(reports):
+    for i, (t, mode, op, reason, chained) in enumerate(reports):
         t_next = reports[i + 1][0] if i + 1 < len(reports) else max(end, t)
         seg_end = t_next
         unknown = None
@@ -128,8 +136,10 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
                 unknown = Segment(seg_end, t_next, None, "UNKNOWN", None, "control reports stopped while the robot kept logging")
         if segs and segs[-1].mode == mode and segs[-1].operator_ref == op and segs[-1].t_end == t:
             segs[-1].t_end = seg_end
+            if chained is False:
+                segs[-1].chained = False
         else:
-            segs.append(Segment(t, seg_end, mode, MODE_NAMES.get(mode, f"MODE_{mode}"), op, reason))
+            segs.append(Segment(t, seg_end, mode, MODE_NAMES.get(mode, f"MODE_{mode}"), op, reason, chained))
         if unknown:
             segs.append(unknown)
             F.append(
@@ -149,7 +159,8 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
     # The recorder can lie by omission: a human drives through a channel the mode flag does not watch.
     # Human command traffic during a stretch reported as not-human is the visible trace of that.
     if r.operator_topics:
-        op = sorted((T(m), m.hash) for m in log.messages if m.topic in r.operator_topics)
+        op = sorted((T(m), m.hash) for m in log.messages if m.topic in r.operator_topics and not unseen(m))
+        unseen_ops = sum(1 for m in log.messages if m.topic in r.operator_topics and unseen(m))
         op_times = [t for t, _ in op]
         for s in segs:
             if s.who in ("human", "unknown"):
@@ -165,7 +176,8 @@ def check_control(log: LogFile, operator_patterns: list[str] | None = None, sign
                         "L2",
                         "fail",
                         f"{j - i} operator command message(s) ({distinct} distinct) on {', '.join(r.operator_topics)} between {fmt_rel(op_times[i], start)} and {fmt_rel(op_times[j - 1], start)} "
-                        f"while control was reported {s.mode_name}: the control report does not match the robot's own command traffic",
+                        f"while control was reported {s.mode_name}: the control report does not match the robot's own command traffic"
+                        + (f" ({unseen_ops} command message(s) without a chain link were not counted; the chain check reports them)" if unseen_ops else ""),
                         op_times[i],
                         op_times[j - 1],
                     )

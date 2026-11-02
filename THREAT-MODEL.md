@@ -28,7 +28,9 @@ One page on who might fake a robot log, what each check catches against them, an
 | Edit a message after recording | Yes | chain: link hash ≠ message hash (`MESSAGE_EDITED`) | anyone who holds only the file |
 | Delete a message and its link | Yes | chain: sequence gap, prev mismatch (`CHAIN_BROKEN`) | anyone who holds only the file |
 | Delete and rebuild the whole chain | **Only with a witness** | witness head ≠ file head (`WITNESS_MISMATCH`) | anyone, including the maker, if the witness is outside |
-| Cut the end and append a forged shutdown | **Only with a witness** | witness holds a later head (`TRUNCATED`) | same |
+| Cut the end and append a forged shutdown | **Only with a witness** if the forger holds the device key and chains the marker | witness holds a later head (`TRUNCATED`) | same |
+| Cut the end and append an unchained shutdown marker (no key needed) | Yes | a shutdown marker the chain never saw does not count: `ENDING_UNEXPLAINED` (`MESSAGE_UNCHAINED` names it); the same holds for a shutdown marker planted before a gap | anyone who holds only the file |
+| Remove a stretch from the middle and relabel every later link as a new session, so each half checks on its own | Yes | only the first session in a file may begin above link 1; a later one that does is `CHAIN_BROKEN`, with or without a witness; the witness adds `TRUNCATED` | anyone who holds only the file |
 | Remove the beginning of the file | **Flagged, not decided** | a bag that started after the sidecar looks the same (`CHAIN_STARTS_LATE`, `MESSAGE_BEFORE_START`); a witness head from before the file's first link only confirms the chain existed earlier, not what it held | anyone who holds only the file |
 | Remove the first messages on one topic, or every message on it | Yes, beyond 5 s | links from inside the stretch the file covers are `MESSAGE_MISSING`; only links within 5 s before the bag's first message on that topic are allowed as a late subscription (`MESSAGE_BEFORE_START`) | anyone who holds only the file |
 | Insert a control report or session marker (no link) | Yes while the chain was running; **flagged** outside it | `MESSAGE_UNCHAINED` is a failure between the chain's first and last matched message, a warning before or after; `who` still answers from the file as written, so read the report first | anyone who holds only the file |
@@ -38,7 +40,9 @@ One page on who might fake a robot log, what each check catches against them, an
 | Stop recording for a while | Yes, as a gap | `GAP_UNEXPLAINED` unless a marker explains it | recorder operator |
 | Kill the recorder | Told apart from a cut **only with a witness** | `ENDING_UNMARKED` vs `ENDING_UNEXPLAINED` | same |
 | Set the clock back | Partly | `TIME_JUMP`, `CLOCK_SKEW`; witness gives an outer bound | maker |
-| Re-stamp messages in bag time (move the human stretch to the moment of the incident; bytes and links untouched) | Yes, beyond 2 s | the link's `recv_time` is signed and the timelines are built from it; `TIME_MOVED` is a failure when a control report, session marker or operator command moved, so `who` answers from the signed times | anyone who holds the file |
+| Re-stamp messages in bag time (move the human stretch to the moment of the incident, or the incident into the human stretch; bytes and links untouched) | Yes, beyond 2 s | the link's `recv_time` is signed and the timelines are built from it; any moved message is a `TIME_MOVED` failure, so `who` answers from the signed times and a moved incident is named | anyone who holds the file |
+| Plant operator-command messages (no links) during an autonomous stretch, to "prove" a hidden human | Yes | messages without a link on a topic the chain node was covering are not evidence: no `CONTROL_INCONSISTENT`; they are reported as `MESSAGE_UNCHAINED` | claimant or operator who holds only the file |
+| Plant a control report where no chain covers the time (before START, during a sidecar outage) | **Flagged, not decided** | `MESSAGE_UNCHAINED` warning; `who` answers from it but says the report has no chain link | anyone who holds only the file |
 | Report AUTONOMOUS while a human drives through an unwatched channel | **Partly** | `CONTROL_INCONSISTENT` if the human's commands are on a recorded topic; otherwise invisible | maker |
 | Record honestly but lie in the recorder itself (fake sensor values) | **No** | nothing in a checker can; this is what signing keys and independent sensors are for | maker |
 | Back-date witness entries | Yes for heads that carry an RFC 3161 receipt; otherwise **no** | the receipt's signed time comes from the timestamp authority's clock (`RECEIPT_VALID`); a head without one is the recorder's word (`RECEIPT_ABSENT`). The authority's certificate chain is not validated, so a forged receipt with a self-signed certificate that names a real authority passes unless the real certificate is given with `--tsa-cert`; the report names the authority. sha1 imprints are refused | witness insider, maker |
@@ -51,11 +55,12 @@ One page on who might fake a robot log, what each check catches against them, an
 3. Witness heads must leave the robot while it runs, to a party the maker does not control. A witness file on the robot is a convenience, not evidence.
 4. Sign links with a device key that is not stored next to the log.
 5. Write the shutdown marker from a path that survives power loss if you can (capacitor, UPS); the checker rewards the marker but cannot require hardware.
+6. Chain your own shutdown marker. A `CLEAN_SHUTDOWN` without a link is worth nothing to the checker, because anyone can append one after a cut; `quaill_recorder` chains it in-process before it exits.
 
 ## What the checker promises, in one sentence each
 
 - PASS on L1 with a witness: nothing in this file was changed, removed or cut since the witnessed heads were taken.
 - PASS on L1 without a witness: nothing in the middle was changed or removed; the end is unverified.
 - PASS on L2 control: the control reports are present, continuous, name an operator whenever a human drove, and do not contradict the recorded command traffic.
-- PASS on L2 completeness: every silence longer than the threshold has a marker that explains it, and the log ends with a marker or a witnessed head.
+- PASS on L2 completeness: every silence longer than the threshold has a marker that explains it, and the log ends with a marker or a witnessed head; where the log has a chain, a shutdown marker counts only if the chain saw it.
 - Nothing here says the recorder told the truth when it wrote. That trust comes from outside the file: keys, witnesses, and pulling the log yourself.
