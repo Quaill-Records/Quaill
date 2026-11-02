@@ -57,6 +57,13 @@ jobs:
           "$HOME/qenv/bin/quaill" demo demo-logs | tail -n 3
           "$HOME/qenv/bin/python" tests/check_hashes.py
 
+      - name: A stop signal must not cut a chain link in half
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source ros2_ws/install/setup.bash
+          python3 ros2_ws/test_shutdown_signal.py
+
       - name: Record the runs and check each bag
         shell: bash
         env:
