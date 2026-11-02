@@ -1,4 +1,4 @@
-# Quaill Records (v0.0.2)
+# Quaill Records (v0.0.3)
 
 Checks a robot's log and answers three questions:
 
@@ -164,7 +164,7 @@ Does not prove: anything about a real robot. All 59 logs come from the synthetic
 - [TRADEMARK.md](TRADEMARK.md): how the name may be used; never "certified", "verified", "compliant", "safe".
 - [PRIVACY.md](PRIVACY.md): `operator_ref` is personal data; what a maker or operator should consider before switching the layout on.
 
-## Not in v0.0.2 yet
+## Not in v0.0.3 yet
 
 - Key registration. The checker trusts a key you hand it; nothing yet ties a key to a robot in a registry or a witness record beyond the per-entry `key_id`.
 - Validation of a timestamp authority's certificate chain. Receipts are checked against the certificate embedded in them or given with `--tsa-cert`; a forged receipt with a self-signed certificate that names a real authority passes unless the real certificate is supplied.

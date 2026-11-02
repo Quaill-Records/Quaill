@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quaill"
-version = "0.0.2"
+version = "0.0.3"
 description = "Open checker for robot logs: who was in control, was it edited, what's missing."
 readme = "README.md"
 license = "Apache-2.0"
