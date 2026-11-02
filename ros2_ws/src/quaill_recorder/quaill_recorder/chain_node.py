@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import rclpy
-from rclpy.executors import ExternalShutdownException
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -163,8 +163,6 @@ class ChainNode(Node):
         os.replace(tmp, self.state_path)
 
     def shutdown_clean(self) -> None:
-        # launch forwards Ctrl+C to a process that already got it from the terminal's process group; a second one here would lose the marker
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
         # Spin has stopped, so keep spinning until our own subscription hands back this marker and chains it: the
         # chain goes through the same path as every other message. An unchained CLEAN_SHUTDOWN proves nothing to the
         # checker (anyone can append one).
@@ -172,7 +170,7 @@ class ChainNode(Node):
         self._publish_session("CLEAN_SHUTDOWN")
         deadline = time.monotonic() + MARKER_WAIT_S
         while self._marker_pending and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.executor.spin_once(timeout_sec=0.05)
         if self._marker_pending:
             self.get_logger().warning(f"CLEAN_SHUTDOWN did not come back within {MARKER_WAIT_S} s; it is in the bag without a chain link")
         self._closing = True
@@ -279,16 +277,26 @@ class ChainNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)  # rclpy's own Ctrl+C handler shuts the context down before CLEAN_SHUTDOWN can be published
+    # rclpy's own Ctrl+C handler shuts the context down before CLEAN_SHUTDOWN can be published, and a
+    # KeyboardInterrupt can land inside a callback, after a link took its seq but before it was published,
+    # which reads as a removed link. So a signal only sets a flag; the current message always finishes.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    stop: list[int] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):  # launch escalates to SIGTERM; a slow timestamp request must not lose the marker
+        signal.signal(sig, lambda signum, frame: stop.append(signum))
     node = ChainNode()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):
+        while rclpy.ok() and not stop:
+            executor.spin_once(timeout_sec=0.1)
+    except ExternalShutdownException:
         pass
     finally:
         try:
             node.shutdown_clean()
         finally:
+            executor.shutdown()
             node.destroy_node()
             if rclpy.ok():
                 rclpy.shutdown()
